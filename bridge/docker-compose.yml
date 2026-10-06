@@ -1,0 +1,15 @@
+services:
+  dash-bridge:
+    build: .
+    container_name: dash-bridge
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    environment:
+      # Comma-separated stock symbols for the dashboard watchlist.
+      # Override per deploy, e.g.: WATCHLIST=AMD,NVDA,TSLA docker compose up -d
+      - WATCHLIST=${WATCHLIST:-AMD,NVDA,AAPL,MSFT,SPY,QQQ}
+      # Weather location (default: Austin, TX)
+      - LAT=${LAT:-30.2672}
+      - LON=${LON:--97.7431}
+      - TZ=${TZ:-America/Chicago}
