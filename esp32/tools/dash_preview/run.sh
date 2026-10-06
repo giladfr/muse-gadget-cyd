@@ -13,7 +13,8 @@ OUT="${1:-$HERE/../../build-preview}"
 mkdir -p "$OUT/raw"
 rm -f "$OUT"/raw/*.raw
 SRCS=(dashboard.c dash_draw.c dash_screens.c dash_store.c dash_touch.c
-      dash_net.c dash_clock.c dash_backlight.c dash_icons.c dash_assets.c)
+      dash_net.c dash_clock.c dash_backlight.c dash_icons.c dash_assets.c
+      dash_quotes.c)
 ${CC:-cc} -std=gnu11 -O1 -g ${PREVIEW_CFLAGS:--fsanitize=address,undefined} \
     -Wall -Wno-unused-parameter -Wno-unused-function \
     -I"$HERE/stubs" -I"$MAIN" -I"$MAIN/dashboard" \

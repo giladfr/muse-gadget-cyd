@@ -1961,11 +1961,28 @@ static cJSON *on_ws_command(
         return async;
     }
     if (strcmp(command, "dashboard.debug") == 0) {
-        char dbg[256];
+        char dbg[400];
         dashboard_debug(dbg, sizeof(dbg));
         cJSON *result = cJSON_CreateObject();
         cJSON_AddBoolToObject(result, "ok", true);
         cJSON_AddStringToObject(result, "debug", dbg);
+        return result;
+    }
+    if (strcmp(command, "dashboard.stocks") == 0) {
+        cJSON *key = cJSON_GetObjectItem(params, "key");
+        cJSON *symbols = cJSON_GetObjectItem(params, "symbols");
+        const char *err = NULL;
+        if ((cJSON_IsString(key) || cJSON_IsString(symbols))
+            && !dashboard_quotes_configure(
+                   cJSON_IsString(key) ? key->valuestring : NULL,
+                   cJSON_IsString(symbols) ? symbols->valuestring : NULL, &err)) {
+            return command_error("invalid_param", err);
+        }
+        char status[160];
+        dashboard_quotes_status(status, sizeof(status));
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        cJSON_AddStringToObject(result, "status", status);
         return result;
     }
     if (strcmp(command, "dashboard.calibrate") == 0) {

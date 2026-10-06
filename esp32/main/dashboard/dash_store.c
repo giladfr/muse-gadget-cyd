@@ -83,6 +83,7 @@ static void merge_history(dash_stock_t *fresh, int n, const dash_store_t *s,
         if (old) {
             memcpy(st->history, old->history, sizeof(st->history));
             st->history_n = old->history_n;
+            st->history_us = old->history_us;
             st->moved = old->moved;
             st->moved_us = old->moved_us;
             if (st->price != old->price) {
@@ -90,12 +91,19 @@ static void merge_history(dash_stock_t *fresh, int n, const dash_store_t *s,
                 st->moved_us = now_us;
             }
         }
+        if (st->history_n > 0
+            && now_us - st->history_us < (int64_t)DASH_HISTORY_STEP_S * 1000000) {
+            // Too soon for a new point: move the tip.
+            st->history[st->history_n - 1] = (float)st->price;
+            continue;
+        }
         if (st->history_n == DASH_HISTORY) {
             memmove(st->history, st->history + 1,
                     sizeof(st->history[0]) * (DASH_HISTORY - 1));
             st->history_n--;
         }
         st->history[st->history_n++] = (float)st->price;
+        st->history_us = now_us;
     }
 }
 
@@ -125,7 +133,23 @@ static void parse_weather(const cJSON *w, dash_weather_t *wx) {
 // too much for a command handler's stack); only touched under the lock.
 static dash_stock_t s_fresh[DASH_MAX_STOCKS];
 
+static bool s_direct;
+
+void dash_store_set_direct_quotes(bool on) {
+    s_direct = on;
+}
+
+static bool set_bridge(const cJSON *root, bool take_stocks);
+
 bool dash_store_set_bridge(const cJSON *root) {
+    return set_bridge(root, !s_direct);
+}
+
+bool dash_store_set_direct(const cJSON *root) {
+    return set_bridge(root, true);
+}
+
+static bool set_bridge(const cJSON *root, bool take_stocks) {
     if (!cJSON_IsObject(root)) {
         ESP_LOGW(TAG, "bridge data is not a JSON object");
         return false;
@@ -148,7 +172,8 @@ bool dash_store_set_bridge(const cJSON *root) {
     const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "stocks");
     int64_t now_us = esp_timer_get_time();
     dash_store_t *s = store_lock();
-    int n_stocks = cJSON_IsArray(arr) ? parse_stocks(arr, s_fresh) : 0;
+    int n_stocks = take_stocks && cJSON_IsArray(arr) ? parse_stocks(arr, s_fresh)
+                                                     : 0;
     if (n_stocks > 0) {
         merge_history(s_fresh, n_stocks, s, now_us);
         memcpy(s->stocks, s_fresh, sizeof(s_fresh[0]) * (size_t)n_stocks);

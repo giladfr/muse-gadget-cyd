@@ -468,3 +468,23 @@ cJSON *cJSON_GetObjectItem(const cJSON *object, const char *string) {
     }
     return NULL;
 }
+
+// Array helpers used by the dashboard's live-quotes module (preview only).
+cJSON *cJSON_CreateArray(void) {
+    return new_item(cJSON_Array);
+}
+
+cJSON *cJSON_AddArrayToObject(cJSON *object, const char *name) {
+    cJSON *a = cJSON_CreateArray();
+    if (a && !cJSON_AddItemToObject(object, name, a)) {
+        cJSON_Delete(a);
+        return NULL;
+    }
+    return a;
+}
+
+int cJSON_AddItemToArray(cJSON *array, cJSON *item) {
+    if (!array || !item) return 0;
+    append_child(array, item);
+    return 1;
+}

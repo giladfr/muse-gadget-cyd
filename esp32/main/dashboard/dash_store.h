@@ -19,6 +19,9 @@ extern "C" {
 #define DASH_MAX_FORECAST 4
 // Prices kept per symbol for the sparkline (one per update the board gets).
 #define DASH_HISTORY 32
+// A new sparkline point at most this often; in between, the newest point
+// just follows the price, so frequent quotes move the tip, not the history.
+#define DASH_HISTORY_STEP_S 120
 
 typedef struct {
     char symbol[16];
@@ -28,6 +31,7 @@ typedef struct {
     char market[16];   // "Open" / "Closed" / ...
     float history[DASH_HISTORY];  // oldest first; the last is `price`
     uint8_t history_n;
+    int64_t history_us;  // when the newest history point was started
     int8_t moved;      // +1 / -1: price went up / down in the last update
     int64_t moved_us;  // when (esp_timer_get_time()), 0 = never
 } dash_stock_t;
@@ -83,6 +87,12 @@ void dash_store_snapshot(dash_store_t *out);
 // so a failed upstream fetch never blanks the screen. Returns false if the
 // document is not an object.
 bool dash_store_set_bridge(const cJSON *root);
+
+// Who owns the quotes. While the board fetches them itself (dash_quotes.c),
+// "stocks" in pushed bridge JSON is ignored so the two don't fight.
+void dash_store_set_direct_quotes(bool on);
+// The board's own quotes, in the same format as bridge JSON.
+bool dash_store_set_direct(const cJSON *root);
 // Replace calendar events ({"label": "...", "events": [...]}).
 bool dash_store_set_calendar(const cJSON *root);
 

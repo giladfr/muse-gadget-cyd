@@ -1,28 +1,19 @@
 # dash-bridge
 
-Small bridge service for the CYD dashboard (ESP32-2432S028R, 320x240).
+Data helper for the CYD dashboard (ESP32-2432S028R, 320x240).
 
-**Why it exists:** the dashboard board has no PSRAM, so it cannot do TLS.
-It can't call Nasdaq or Open-Meteo directly. This service runs on the home
-NAS (always on, same LAN), polls those HTTPS APIs, and re-serves one
-compact JSON document over **plain HTTP** that the board polls.
+**How it's used:** Muse's VM runs `fetch.py`, which fetches weather from
+Open-Meteo (and stock quotes from Nasdaq) and prints one compact JSON
+document; Muse pushes it to the board with `dashboard.data screen="bridge"`.
+`fetch.py` imports `bridge.py`, so keep the two together.
 
-## Run on the NAS
+Live stock quotes during market hours don't need this: the board fetches
+them itself (see `DASHBOARD.md`, "Live stock quotes"), and ignores pushed
+stocks while it does.
 
-On the Beelink (OpenMediaVault with Docker Compose):
-
-```sh
-cd /path/to/bridge
-docker compose up -d --build
-```
-
-Check it's alive: `curl http://<nas-ip>:8080/health` → `{"ok": true}`
-
-Change the watchlist without rebuilding:
-
-```sh
-WATCHLIST=AMD,NVDA,TSLA docker compose up -d
-```
+Optionally, `bridge.py` also runs as a small always-on server the board can
+poll over plain HTTP (`CONFIG_HOMEHUB_DASHBOARD_BRIDGE_POLL`), e.g. with
+`docker compose up -d --build` on a home server. Nothing requires it.
 
 ## Endpoints
 

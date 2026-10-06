@@ -9,3 +9,4 @@ void vTaskNotifyGiveFromISR(TaskHandle_t t, BaseType_t *w);
 void vTaskDelay(TickType_t t);
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t t);
 TickType_t xTaskGetTickCount(void);
+void vTaskDelete(TaskHandle_t t);

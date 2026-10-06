@@ -18,6 +18,7 @@
 #include "dash_clock.h"
 #include "dash_draw.h"
 #include "dash_net.h"
+#include "dash_quotes.h"
 #include "dash_screens.h"
 #include "dash_store.h"
 #include "dash_touch.h"
@@ -259,7 +260,7 @@ static void calibrate_tap(dash_touch_t t) {
     s_cal_raw[s_cal_step][1] = t.raw_y;
     s_cal_ms = now_ms();
     if (++s_cal_step < 3) {
-        char hint[16];
+        char hint[24];
         snprintf(hint, sizeof(hint), "%d of 3", s_cal_step + 1);
         show_calibration("Tap the centre of the target", hint, true);
         return;
@@ -326,6 +327,7 @@ static void activate(void) {
     dash_touch_init(s_task);
     dash_backlight_init();
     dash_clock_start();
+    dash_quotes_init();
 #if CONFIG_HOMEHUB_DASHBOARD_BRIDGE_POLL
     dash_net_start();
 #endif
@@ -381,6 +383,8 @@ static void dash_task(void *arg) {
         s_ota_dirty = false;
         xSemaphoreGive(s_lock);
         int64_t now = now_ms();
+        // Live quotes: quiet while an image or firmware is downloading.
+        dash_quotes_tick(st != DASH_PENDING && st != DASH_UPDATING);
 
         if (st == DASH_UPDATING) {
             if (ota_dirty) {
@@ -558,6 +562,17 @@ void dashboard_calibrate(bool reset) {
     wake();
 }
 
+bool dashboard_quotes_configure(const char *key, const char *symbols,
+                                const char **err) {
+    bool ok = dash_quotes_configure(key, symbols, err);
+    if (ok) wake();
+    return ok;
+}
+
+void dashboard_quotes_status(char *buf, size_t n) {
+    dash_quotes_status(buf, n);
+}
+
 void dashboard_ota_progress(int pct) {
     if (!s_lock) return;
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -622,9 +637,12 @@ void dashboard_data_updated(void) {
 }
 
 void dashboard_debug(char *buf, size_t n) {
-    char t[112], b[64];
+    char t[112], b[64], q[112];
     dash_touch_debug(t, sizeof(t));
     dash_backlight_debug(b, sizeof(b));
-    snprintf(buf, n, "%s | %s | state=%d free=%u", t, b, (int)s_state,
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    dash_quotes_status(q, sizeof(q));
+    snprintf(buf, n, "%s | %s | %s | state=%d free=%u block=%u", t, b, q,
+             (int)s_state,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 }

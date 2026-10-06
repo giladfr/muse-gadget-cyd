@@ -6,6 +6,10 @@
 CONFIG_GADGET_SDK_TOKEN="mgst_..."
 #
 # Optional:
+# Live stock quotes (free key from finnhub.io; or set it at runtime with
+# dashboard.stocks, which needs no rebuild).
+# CONFIG_HOMEHUB_DASHBOARD_QUOTES_KEY="..."
+# CONFIG_HOMEHUB_DASHBOARD_QUOTES_SYMBOLS="AMD,NVDA,AAPL,MSFT,SPY,QQQ"
 # CONFIG_HOMEHUB_DASHBOARD_TZ="CST6CDT,M3.2.0,M11.1.0"
 # CONFIG_HOMEHUB_DASHBOARD_BRIDGE_URL="http://192.168.1.100:8080/dash.json"
 # CONFIG_HOMEHUB_DASHBOARD_BL_NIGHT_START=23

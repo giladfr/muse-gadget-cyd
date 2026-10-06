@@ -89,6 +89,9 @@ CONFIG_HOMEHUB_DASHBOARD_TOUCH_MOSI=32
 CONFIG_HOMEHUB_DASHBOARD_TOUCH_MISO=39
 CONFIG_HOMEHUB_DASHBOARD_TOUCH_CS=33
 CONFIG_HOMEHUB_DASHBOARD_TOUCH_IRQ=36
+# Live quotes fetched by the board itself during market hours. The Finnhub
+# API key goes in devices/sdkconfig.local or comes from dashboard.stocks.
+CONFIG_HOMEHUB_DASHBOARD_QUOTES=y
 
 # OTA is enabled in the dashboard fork so future versions can be pushed from
 # the cloud. The two OTA slots are 0x1E0000 (~1.79 MB) each.

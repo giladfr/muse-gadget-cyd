@@ -408,6 +408,40 @@ menu "ESP32 Device SDK"
         range 0 100
         default 30
 
+    config HOMEHUB_DASHBOARD_QUOTES
+        bool "Fetch live stock quotes on the device (Finnhub)"
+        depends on HOMEHUB_DASHBOARD
+        default n
+        help
+            The board fetches its watchlist from Finnhub's quote API over
+            HTTPS: every QUOTES_OPEN_S seconds while the US market is open,
+            every minute pre-/after-market, every 30 minutes when closed. No
+            server and no Muse VM involved. Needs a free API key from
+            finnhub.io (here, or at runtime with dashboard.stocks). While it
+            works, stocks pushed with dashboard.data are ignored.
+
+    config HOMEHUB_DASHBOARD_QUOTES_KEY
+        string "Finnhub API key"
+        depends on HOMEHUB_DASHBOARD_QUOTES
+        default ""
+        help
+            Better kept in devices/sdkconfig.local, or set at runtime with
+            dashboard.stocks (stored in NVS, which wins over this).
+
+    config HOMEHUB_DASHBOARD_QUOTES_SYMBOLS
+        string "Watchlist (comma-separated, up to 8)"
+        depends on HOMEHUB_DASHBOARD_QUOTES
+        default "AMD,NVDA,AAPL,MSFT,SPY,QQQ"
+
+    config HOMEHUB_DASHBOARD_QUOTES_OPEN_S
+        int "Seconds between quote refreshes while the market is open"
+        depends on HOMEHUB_DASHBOARD_QUOTES
+        range 5 300
+        default 15
+        help
+            Raised automatically to stay under the free tier's 60 calls a
+            minute (one call per symbol per refresh).
+
     config HOMEHUB_DASHBOARD_BRIDGE_POLL
         bool "Poll the bridge URL from the device"
         depends on HOMEHUB_DASHBOARD
