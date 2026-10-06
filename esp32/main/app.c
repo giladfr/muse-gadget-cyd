@@ -1969,13 +1969,10 @@ static cJSON *on_ws_command(
         return result;
     }
     if (strcmp(command, "dashboard.stocks") == 0) {
-        cJSON *key = cJSON_GetObjectItem(params, "key");
         cJSON *symbols = cJSON_GetObjectItem(params, "symbols");
         const char *err = NULL;
-        if ((cJSON_IsString(key) || cJSON_IsString(symbols))
-            && !dashboard_quotes_configure(
-                   cJSON_IsString(key) ? key->valuestring : NULL,
-                   cJSON_IsString(symbols) ? symbols->valuestring : NULL, &err)) {
+        if (cJSON_IsString(symbols)
+            && !dashboard_quotes_configure(symbols->valuestring, &err)) {
             return command_error("invalid_param", err);
         }
         char status[160];

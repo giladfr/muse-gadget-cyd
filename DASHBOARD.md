@@ -23,11 +23,11 @@ itself back.
   `display.draw_url`, `display.draw_sd`); **X** closes it, and it returns to
   the dashboard by itself after 10 minutes.
 - **Data:** live stock quotes fetched by the board itself during market
-  hours (Finnhub); weather and the calendar pushed by Muse with
+  hours (Nasdaq, no API key); weather and the calendar pushed by Muse with
   `dashboard.data`. Nothing runs anywhere except the board and Muse's VM.
 - **Over the air:** firmware (`device.ota`) and SD-card files (`sd.fetch`).
 
-Version: `esp32/version.txt` (1.2.0).
+Version: `esp32/version.txt` (1.3.0).
 
 ## Preview without a board
 
@@ -71,9 +71,8 @@ Put personal values in `esp32/devices/sdkconfig.local` (git-ignored, see
 | `HOMEHUB_DASHBOARD_TAKEOVER_TIMEOUT_MIN` | 10 | 0 = images stay until X |
 | `HOMEHUB_DASHBOARD_TOUCH_SWAP_XY` / `_INVERT_X` / `_INVERT_Y` | n | defaults until calibrated |
 | `HOMEHUB_DASHBOARD_QUOTES` | y (CYD) | live quotes fetched by the board |
-| `HOMEHUB_DASHBOARD_QUOTES_KEY` | — | Finnhub key (or `dashboard.stocks`) |
 | `HOMEHUB_DASHBOARD_QUOTES_SYMBOLS` | `AMD,NVDA,AAPL,MSFT,SPY,QQQ` | up to 8 (or `dashboard.stocks`) |
-| `HOMEHUB_DASHBOARD_QUOTES_OPEN_S` | 15 | refresh while the market is open |
+| `HOMEHUB_DASHBOARD_QUOTES_OPEN_S` | 20 | refresh while the market is open |
 | `HOMEHUB_DASHBOARD_BRIDGE_POLL` / `_URL` | n | poll a self-hosted `bridge.py` (not needed) |
 
 ## Updating over the air
@@ -129,34 +128,40 @@ and only if the SHA-256 matches when one is given. Then e.g.
 - `dashboard.calibrate` `{reset?}`: touch calibration screen (or forget it).
 - `dashboard.debug`: touch raw/pressure, light sensor, backlight, state, free
   heap.
-- `dashboard.stocks` `{key?, symbols?}`: live-quote settings and status.
+- `dashboard.stocks` `{symbols?}`: live-quote watchlist and status.
 - `device.ota` `{url, force?}`, `sd.fetch`: see above.
 
 ## Live stock quotes
 
-The board fetches its watchlist from [Finnhub](https://finnhub.io)'s quote
-API itself, over HTTPS: every 15 s while the US market is open (9:30-16:00
-New York time, weekdays), every minute pre-/after-market, every 30 minutes
-when closed. Each price move flashes its row and moves the sparkline's tip;
-a new sparkline point is added every 2 minutes.
+The board fetches its watchlist itself from Nasdaq's public quote API over
+HTTPS, with **no API key**: the same source and request as DeskPulse
+(browser-like headers; stocks → ETF → index asset classes, remembered per
+symbol). Every 20 s while the US market is open (9:30-16:00 New York time),
+every minute pre-/after-market (showing the extended-hours trade, like
+DeskPulse), every 30 minutes when closed. Nasdaq's own market status covers
+holidays.
 
-1. Get a free API key at finnhub.io (60 calls a minute; a round is one call
-   per symbol, and the refresh slows down by itself to stay under 50).
-2. Give it to the board, either way:
-   - ask Muse: `dashboard.stocks {"key": "<key>", "symbols": "AMD,NVDA,SPY"}`
-     (saved on the board; no rebuild), or
-   - `CONFIG_HOMEHUB_DASHBOARD_QUOTES_KEY` in `devices/sdkconfig.local`.
-3. `dashboard.stocks` with no params reports status; `dashboard.debug` too.
+- Each price move flashes its row; the sparkline is today's intraday chart
+  (refreshed every 5 min, streamed and downsampled on the fly since the full
+  chart is ~40 KB), with its tip following the live price.
+- Change the watchlist with `dashboard.stocks {"symbols": "AMD,NVDA,SPY"}`
+  (up to 8; saved on the board). With no params it reports status, as does
+  `dashboard.debug`.
+- While its own quotes arrive, the board ignores `stocks` in pushed
+  `dashboard.data`, so Muse's VM only needs to push weather and the calendar.
+- A symbol Nasdaq doesn't know is retried every 10 minutes; if Nasdaq refuses
+  (HTTP 403/429) the board backs off for 5 minutes.
 
-While its own quotes arrive, the board ignores `stocks` in pushed
-`dashboard.data`, so Muse's VM only needs to push weather and the calendar.
+Memory: each round runs on a short-lived task with one keep-alive TLS
+session (both freed afterwards). It is skipped while free RAM is under
+~64 KB, and while an image or firmware update downloads. If `dashboard.debug`
+shows `heap_skips` climbing, the board doesn't have the room; say so and we
+can trim elsewhere.
 
-Memory: each round runs on a short-lived task with its own TLS session (both
-freed afterwards). It is skipped while free RAM is under ~52 KB, and while an
-image or firmware update downloads. If `dashboard.debug` shows `heap_skips`
-climbing, the board doesn't have the room; say so and we can trim elsewhere.
+`tools/dash_preview/run.sh` also runs `quotes_test.c`: a full round against
+DeskPulse's Nasdaq fixtures, no network.
 
-## Weather (and stocks without a key) from the Muse VM
+## Weather from the Muse VM
 
 Muse's VM runs `bridge/fetch.py` (it imports `bridge.py`, keep them together)
 and pushes the output with `dashboard.data screen="bridge"`. Set `LOCATION`,

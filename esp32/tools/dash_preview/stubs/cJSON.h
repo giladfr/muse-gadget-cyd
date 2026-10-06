@@ -7,3 +7,6 @@ static inline int cJSON_IsNumber(const cJSON *i){return i && (i->type & 0xff)==c
 cJSON *cJSON_CreateArray(void);
 cJSON *cJSON_AddArrayToObject(cJSON *object, const char *name);
 int cJSON_AddItemToArray(cJSON *array, cJSON *item);
+cJSON *cJSON_CreateFloatArray(const float *numbers, int count);
+int cJSON_GetArraySize(const cJSON *array);
+cJSON *cJSON_GetArrayItem(const cJSON *array, int index);

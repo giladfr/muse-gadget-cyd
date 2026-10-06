@@ -21,5 +21,15 @@ ${CC:-cc} -std=gnu11 -O1 -g ${PREVIEW_CFLAGS:--fsanitize=address,undefined} \
     -include "$HERE/stubs/sdkconfig.h" -include "$HERE/stubs/fake_time.h" \
     "$HERE/preview.c" "${SRCS[@]/#/$MAIN/dashboard/}" "$HERE/cJSON.c" \
     -o "$OUT/preview" -lpthread -lm
+# Live-quotes unit test (no network: canned Nasdaq responses).
+${CC:-cc} -std=gnu11 -O1 -g ${PREVIEW_CFLAGS:--fsanitize=address,undefined} \
+    -Wall -Wno-unused-function \
+    -I"$HERE/stubs" -I"$MAIN" -I"$MAIN/dashboard" \
+    -include "$HERE/stubs/sdkconfig.h" -include "$HERE/stubs/fake_time.h" \
+    "$HERE/quotes_test.c" "$MAIN/dashboard/dash_store.c" "$HERE/cJSON.c" \
+    -o "$OUT/quotes_test" -lm
+"$OUT/quotes_test" > "$OUT/quotes_test.log" || { cat "$OUT/quotes_test.log"; exit 1; }
+echo "quotes test: $(grep -c '^ok:' "$OUT/quotes_test.log") checks passed"
+
 (cd "$OUT" && ./preview > preview.log)
 python3 "$HERE/make_previews.py" "$OUT"

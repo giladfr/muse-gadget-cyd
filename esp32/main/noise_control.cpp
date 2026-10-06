@@ -1398,17 +1398,13 @@ static char *build_register_json(void) {
                                     "Forget the saved calibration instead.");
             cJSON_AddItemToObject(cal_optional, "reset", reset_param);
             cJSON *stocks_optional = cJSON_CreateObject();
-            cJSON_AddItemToObject(stocks_optional, "key",
-                                  string_param("Finnhub API key (free at "
-                                               "finnhub.io); \"\" turns live "
-                                               "quotes off."));
             cJSON_AddItemToObject(stocks_optional, "symbols",
                                   string_param("Watchlist, comma-separated, up "
                                                "to 8, e.g. AMD,NVDA,SPY."));
             add_command(commands, "dashboard.stocks",
-                        "Live stock quotes fetched by the device itself during "
-                        "market hours: set the API key and/or watchlist (saved "
-                        "on the device), or with no params just report status.",
+                        "Live stock quotes the device fetches itself from Nasdaq "
+                        "(no API key) during market hours: set the watchlist "
+                        "(saved on the device), or with no params report status.",
                         nullptr, stocks_optional);
             add_command(commands, "dashboard.calibrate",
                         "Show the touch calibration screen (tap three targets; "

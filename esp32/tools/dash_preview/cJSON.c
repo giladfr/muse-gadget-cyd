@@ -488,3 +488,21 @@ int cJSON_AddItemToArray(cJSON *array, cJSON *item) {
     append_child(array, item);
     return 1;
 }
+
+cJSON *cJSON_CreateFloatArray(const float *numbers, int count) {
+    cJSON *a = cJSON_CreateArray();
+    for (int i = 0; a && i < count; i++) cJSON_AddItemToArray(a, cJSON_CreateNumber(numbers[i]));
+    return a;
+}
+
+int cJSON_GetArraySize(const cJSON *array) {
+    int n = 0;
+    for (const cJSON *c = array ? array->child : NULL; c; c = c->next) n++;
+    return n;
+}
+
+cJSON *cJSON_GetArrayItem(const cJSON *array, int index) {
+    cJSON *c = array ? array->child : NULL;
+    while (c && index-- > 0) c = c->next;
+    return c;
+}

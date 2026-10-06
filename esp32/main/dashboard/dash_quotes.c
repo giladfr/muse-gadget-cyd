@@ -1,5 +1,6 @@
 /*
- * Live stock quotes implementation.
+ * Live stock quotes implementation: Nasdaq's public quote API, no key (the
+ * same source as DeskPulse and bridge/bridge.py).
  */
 #include "dash_quotes.h"
 
@@ -7,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include "cJSON.h"
@@ -27,42 +29,60 @@ static const char *TAG = "dash.quotes";
 
 #if CONFIG_HOMEHUB_DASHBOARD_QUOTES
 
-#define URL_FMT "https://finnhub.io/api/v1/quote?symbol=%s&token=%s"
+// Nasdaq answers only requests that look like a browser's, and only for the
+// right asset class (stocks, ETFs and indexes share the endpoints).
+#define URL_FMT "https://api.nasdaq.com/api/quote/%s/%s?assetclass=%s"
+#define USER_AGENT "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/605.1.15 Safari/605.1.15"
+static const char *const s_classes[] = {"stocks", "etf", "index"};
+#define N_CLASSES 3
+
 #define MAX_SYMBOLS DASH_MAX_STOCKS
-#define KEY_MAX 64
-// Fits the URL with the longest symbol and key (and keeps -Wformat-truncation
-// quiet, which cannot see that symbols are at most 11 characters).
-#define URL_MAX 256
 #define SYMS_MAX 96
-// Finnhub's free tier allows 60 calls a minute; stay under 50.
-#define CALLS_PER_MIN 50
+#define URL_MAX 160
+// A quote response is ~2-3 KB of JSON.
+#define BODY_MAX (8 * 1024)
+// Intraday chart points kept while streaming (a full day is ~390 + extended).
+#define CHART_MAX 1024
+#define CHART_REFRESH_S (5 * 60)
 #define EXTENDED_S 60
 #define CLOSED_S (30 * 60)
 #define RETRY_S 30
-#define RATE_LIMIT_S 60
+#define BLOCKED_S (5 * 60)
+// A symbol no asset class answers for is probably mistyped: ask rarely.
+#define UNKNOWN_SYMBOL_S (10 * 60)
+// Be polite: at most one request per symbol every 2 s on average.
+#define MIN_S_PER_SYMBOL 2
 // While quotes keep arriving, the board owns them and pushed stocks are
 // ignored; after this long without one, pushes are accepted again.
 #define OWN_WINDOW_S (45 * 60)
-// A TLS session needs a 16 KB receive buffer plus handshake state, and the
-// round's task an 8 KB stack.
+// A TLS session needs a 16 KB receive buffer plus handshake state; the
+// round's task an 8 KB stack, the body buffer 8 KB, the chart 4 KB.
 #define ROUND_STACK 8192
-#define MIN_FREE (52 * 1024)
+#define MIN_FREE (64 * 1024)
 #define MIN_BLOCK (24 * 1024)
 
 #define NVS_NS "dash"
 
 typedef enum { MKT_UNKNOWN, MKT_CLOSED, MKT_PRE, MKT_OPEN, MKT_AFTER } mkt_t;
 
-static char s_key[KEY_MAX + 1];
-static char s_syms[MAX_SYMBOLS][12];
+typedef struct {
+    char symbol[12];
+    int8_t asset;                 // index into s_classes, -1 unknown
+    float spark[DASH_HISTORY];    // today's chart, downsampled
+    uint8_t spark_n;
+    int64_t spark_ms;             // when the chart was fetched, 0 = never
+    int64_t skip_until_ms;        // unknown to Nasdaq: don't ask until then
+} sym_t;
+
+static sym_t s_syms[MAX_SYMBOLS];
 static int s_n_syms;
 static volatile bool s_running;
 static volatile bool s_now;      // fetch at the next tick
 static int64_t s_next_ms;        // next round due
 static int64_t s_last_ok_ms;     // last round with at least one quote
 static volatile int s_last_status;
+static volatile bool s_all_closed;  // Nasdaq said "Closed" for every symbol
 static int s_heap_skips;
-static bool s_bad_key;
 
 static int64_t now_ms(void) {
     return esp_timer_get_time() / 1000;
@@ -100,7 +120,7 @@ static int eastern_offset_s(time_t utc) {
 }
 
 // Regular session 9:30-16:00 ET on weekdays, extended 4:00-20:00. Holidays
-// are not known; on one the quotes simply don't change.
+// come from Nasdaq's own marketStatus (s_all_closed).
 static mkt_t market_phase(void) {
     if (!dash_clock_valid()) return MKT_UNKNOWN;
     time_t utc = time(NULL);
@@ -126,13 +146,14 @@ static const char *phase_label(mkt_t p) {
 }
 
 static int interval_s(mkt_t p) {
-    // Each round costs one call per symbol.
-    int floor_s = (s_n_syms * 60 + CALLS_PER_MIN - 1) / CALLS_PER_MIN;
+    int floor_s = s_n_syms * MIN_S_PER_SYMBOL;
     int s;
-    switch (p) {
-        case MKT_OPEN: s = CONFIG_HOMEHUB_DASHBOARD_QUOTES_OPEN_S; break;
-        case MKT_CLOSED: s = CLOSED_S; break;
-        default: s = EXTENDED_S; break;
+    if (s_all_closed || p == MKT_CLOSED) {
+        s = CLOSED_S;
+    } else if (p == MKT_OPEN) {
+        s = CONFIG_HOMEHUB_DASHBOARD_QUOTES_OPEN_S;
+    } else {
+        s = EXTENDED_S;
     }
     return s > floor_s ? s : floor_s;
 }
@@ -161,54 +182,48 @@ static bool parse_symbols(const char *in, char out[][12], int *n) {
     return *n > 0;
 }
 
-static void load_str(nvs_handle_t h, const char *k, char *dst, size_t n) {
-    size_t len = n;
-    if (nvs_get_str(h, k, dst, &len) != ESP_OK) dst[0] = '\0';
+static void apply_symbols(char syms[][12], int n) {
+    memset(s_syms, 0, sizeof(s_syms));
+    for (int i = 0; i < n; i++) {
+        memcpy(s_syms[i].symbol, syms[i], sizeof(s_syms[i].symbol));
+        s_syms[i].asset = -1;
+    }
+    s_n_syms = n;
 }
 
 void dash_quotes_init(void) {
-    char key[KEY_MAX + 1] = CONFIG_HOMEHUB_DASHBOARD_QUOTES_KEY;
     char syms[SYMS_MAX + 1] = CONFIG_HOMEHUB_DASHBOARD_QUOTES_SYMBOLS;
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        char k[KEY_MAX + 1], v[SYMS_MAX + 1];
-        load_str(h, "qkey", k, sizeof(k));
-        if (k[0]) memcpy(key, k, sizeof(key));
-        load_str(h, "qsyms", v, sizeof(v));
-        if (v[0]) memcpy(syms, v, sizeof(syms));
+        char v[SYMS_MAX + 1];
+        size_t len = sizeof(v);
+        if (nvs_get_str(h, "qsyms", v, &len) == ESP_OK && v[0]) {
+            memcpy(syms, v, sizeof(syms));
+        }
         nvs_close(h);
     }
-    snprintf(s_key, sizeof(s_key), "%s", key);
-    if (!parse_symbols(syms, s_syms, &s_n_syms)) s_n_syms = 0;
+    char parsed[MAX_SYMBOLS][12];
+    int n = 0;
+    if (parse_symbols(syms, parsed, &n)) apply_symbols(parsed, n);
     s_now = true;
-    ESP_LOGI(TAG, "%d symbols, API key %s", s_n_syms, s_key[0] ? "set" : "missing");
+    ESP_LOGI(TAG, "%d symbols from Nasdaq", s_n_syms);
 }
 
-bool dash_quotes_configure(const char *key, const char *symbols,
-                           const char **err) {
-    char syms[MAX_SYMBOLS][12];
+bool dash_quotes_configure(const char *symbols, const char **err) {
+    char parsed[MAX_SYMBOLS][12];
     int n = 0;
-    if (symbols && !parse_symbols(symbols, syms, &n)) {
+    if (!symbols || !parse_symbols(symbols, parsed, &n)) {
         *err = "symbols: up to 8, comma-separated, letters/digits/./-";
         return false;
     }
-    if (key && strlen(key) > KEY_MAX) {
-        *err = "key too long";
+    if (s_running) {
+        *err = "a refresh is running; try again in a few seconds";
         return false;
     }
+    apply_symbols(parsed, n);
     nvs_handle_t h;
-    bool nvs = nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK;
-    if (key) {
-        snprintf(s_key, sizeof(s_key), "%s", key);
-        s_bad_key = false;
-        if (nvs) nvs_set_str(h, "qkey", key);
-    }
-    if (symbols) {
-        memcpy(s_syms, syms, sizeof(syms));
-        s_n_syms = n;
-        if (nvs) nvs_set_str(h, "qsyms", symbols);
-    }
-    if (nvs) {
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, "qsyms", symbols);
         nvs_commit(h);
         nvs_close(h);
     }
@@ -218,98 +233,237 @@ bool dash_quotes_configure(const char *key, const char *symbols,
 
 // ---- fetching -------------------------------------------------------------------
 
+// Response sink: either buffer the body (quotes) or stream-scan it for the
+// chart's "y": prices, which don't fit in RAM as a whole document.
 typedef struct {
-    char buf[512];
+    bool scan;
+    char *buf;
     int len;
+    bool overflow;
+    // Chart scanner.
+    float *pts;
+    int n_pts;
+    int match;       // characters of "\"y\":" matched so far
+    char num[24];
+    int num_len;
+    bool in_num;
 } rx_t;
+
+static void scan_char(rx_t *rx, char c) {
+    static const char pat[] = "\"y\":";
+    if (rx->in_num) {
+        if ((c >= '0' && c <= '9') || c == '.' || c == '-' || c == 'e' || c == 'E'
+            || c == '+') {
+            if (rx->num_len < (int)sizeof(rx->num) - 1) rx->num[rx->num_len++] = c;
+            return;
+        }
+        if (c == ' ' && rx->num_len == 0) return;
+        rx->num[rx->num_len] = '\0';
+        if (rx->num_len && rx->n_pts < CHART_MAX) {
+            rx->pts[rx->n_pts++] = strtof(rx->num, NULL);
+        }
+        rx->in_num = false;
+        rx->num_len = 0;
+    }
+    if (c == pat[rx->match]) {
+        if (++rx->match == (int)sizeof(pat) - 1) {
+            rx->in_num = true;
+            rx->match = 0;
+        }
+    } else {
+        rx->match = c == pat[0] ? 1 : 0;
+    }
+}
 
 static esp_err_t on_http(esp_http_client_event_t *e) {
     rx_t *rx = e->user_data;
-    if (e->event_id == HTTP_EVENT_ON_DATA && rx
-        && rx->len + e->data_len < (int)sizeof(rx->buf)) {
-        memcpy(rx->buf + rx->len, e->data, (size_t)e->data_len);
+    if (e->event_id != HTTP_EVENT_ON_DATA || !rx) return ESP_OK;
+    const char *d = e->data;
+    if (rx->scan) {
+        for (int i = 0; i < e->data_len; i++) scan_char(rx, d[i]);
+    } else if (rx->len + e->data_len < BODY_MAX) {
+        memcpy(rx->buf + rx->len, d, (size_t)e->data_len);
         rx->len += e->data_len;
+    } else {
+        rx->overflow = true;
     }
     return ESP_OK;
 }
 
-static double num(const cJSON *o, const char *k) {
-    const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, k);
-    return cJSON_IsNumber(v) ? v->valuedouble : 0;
+// GET one Nasdaq endpoint; returns the HTTP status (-1 on transport error).
+static int get(esp_http_client_handle_t c, rx_t *rx, char *url, const char *sym,
+               const char *endpoint, int asset, bool scan) {
+    snprintf(url, URL_MAX, URL_FMT, sym, endpoint, s_classes[asset]);
+    esp_http_client_set_url(c, url);
+    rx->scan = scan;
+    rx->len = 0;
+    rx->overflow = false;
+    rx->n_pts = 0;
+    rx->match = 0;
+    rx->in_num = false;
+    rx->num_len = 0;
+    esp_err_t err = esp_http_client_perform(c);
+    int status = err == ESP_OK ? esp_http_client_get_status_code(c) : -1;
+    s_last_status = status;
+    return status;
+}
+
+// "$631.75" / "-2.16" / "-0.34%" -> number; "UNCH" or "" -> dflt.
+static double market_number(const cJSON *v, double dflt) {
+    if (cJSON_IsNumber(v)) return v->valuedouble;
+    if (!cJSON_IsString(v) || !v->valuestring) return dflt;
+    char clean[32];
+    int n = 0;
+    for (const char *p = v->valuestring; *p && n < (int)sizeof(clean) - 1; p++) {
+        if ((*p >= '0' && *p <= '9') || *p == '.' || *p == '-') clean[n++] = *p;
+    }
+    clean[n] = '\0';
+    char *end;
+    double d = strtod(clean, &end);
+    return (n && end != clean) ? d : dflt;
+}
+
+#define NO_PRICE (-1.0)
+
+// Parse a quote. Outside the regular session Nasdaq puts the extended-hours
+// trade in secondaryData; show that when there is one, like DeskPulse.
+static bool parse_quote(const char *body, int len, mkt_t phase, cJSON *out,
+                        bool *closed) {
+    cJSON *root = cJSON_ParseWithLength(body, (size_t)len);
+    const cJSON *data = cJSON_GetObjectItemCaseSensitive(root, "data");
+    const cJSON *primary = cJSON_GetObjectItemCaseSensitive(data, "primaryData");
+    const cJSON *secondary = cJSON_GetObjectItemCaseSensitive(data, "secondaryData");
+    const cJSON *status = cJSON_GetObjectItemCaseSensitive(data, "marketStatus");
+    const char *market = cJSON_IsString(status) ? status->valuestring : "";
+    bool open = strcasecmp(market, "Open") == 0;
+    bool extended = !open && cJSON_IsObject(secondary)
+        && market_number(cJSON_GetObjectItemCaseSensitive(secondary, "lastSalePrice"),
+                         NO_PRICE) > 0;
+    const cJSON *shown = extended ? secondary : primary;
+    double price = market_number(
+        cJSON_GetObjectItemCaseSensitive(shown, "lastSalePrice"), NO_PRICE);
+    bool ok = cJSON_IsObject(primary) && price > 0;
+    if (ok) {
+        cJSON_AddNumberToObject(out, "price", price);
+        cJSON_AddNumberToObject(out, "change", market_number(
+            cJSON_GetObjectItemCaseSensitive(shown, "netChange"), 0));
+        cJSON_AddNumberToObject(out, "changePct", market_number(
+            cJSON_GetObjectItemCaseSensitive(shown, "percentageChange"), 0));
+        const char *label = extended && (phase == MKT_PRE || phase == MKT_AFTER)
+                                ? phase_label(phase)
+                                : (market[0] ? market : phase_label(phase));
+        cJSON_AddStringToObject(out, "market", label);
+        *closed = strcasecmp(market, "Closed") == 0;
+    }
+    cJSON_Delete(root);
+    return ok;
+}
+
+// Downsample the streamed chart into the symbol's sparkline.
+static void keep_spark(sym_t *s, const rx_t *rx) {
+    if (rx->n_pts < 2) return;
+    for (int i = 0; i < DASH_HISTORY; i++) {
+        int k = (int)((int64_t)i * (rx->n_pts - 1) / (DASH_HISTORY - 1));
+        s->spark[i] = rx->pts[k];
+    }
+    s->spark_n = DASH_HISTORY;
 }
 
 static void round_task(void *arg) {
     (void)arg;
     rx_t *rx = calloc(1, sizeof(*rx));
     char *url = malloc(URL_MAX);
+    char *body = malloc(BODY_MAX);
+    float *pts = malloc(sizeof(float) * CHART_MAX);
     cJSON *doc = cJSON_CreateObject();
-    cJSON *arr = cJSON_AddArrayToObject(doc, "stocks");
+    cJSON *arr = doc ? cJSON_AddArrayToObject(doc, "stocks") : NULL;
     esp_http_client_handle_t c = NULL;
-    const char *market = phase_label(market_phase());
-    int got = 0;
-    if (rx && url && doc && arr) {
-        snprintf(url, URL_MAX, URL_FMT, s_syms[0], s_key);
+    mkt_t phase = market_phase();
+    int got = 0, closed_n = 0;
+    bool blocked = false;
+    if (rx && url && body && pts && arr) {
+        rx->buf = body;
+        rx->pts = pts;
+        snprintf(url, URL_MAX, URL_FMT, s_syms[0].symbol, "info", s_classes[0]);
         esp_http_client_config_t cfg = {
             .url = url,
             .crt_bundle_attach = esp_crt_bundle_attach,
             .keep_alive_enable = true,  // one TLS handshake per round
-            .timeout_ms = 8000,
-            .buffer_size = 1024,
-            .buffer_size_tx = 512,
+            .timeout_ms = 10000,
+            .buffer_size = 2048,
+            .buffer_size_tx = 1024,
+            .user_agent = USER_AGENT,
             .event_handler = on_http,
             .user_data = rx,
         };
         c = esp_http_client_init(&cfg);
+        if (c) {
+            esp_http_client_set_header(c, "Accept", "application/json, text/plain, */*");
+            esp_http_client_set_header(c, "Accept-Language", "en-US,en;q=0.9");
+        }
     }
-    for (int i = 0; c && i < s_n_syms; i++) {
-        snprintf(url, URL_MAX, URL_FMT, s_syms[i], s_key);
-        esp_http_client_set_url(c, url);
-        rx->len = 0;
-        esp_err_t err = esp_http_client_perform(c);
-        int status = err == ESP_OK ? esp_http_client_get_status_code(c) : -1;
-        s_last_status = status;
-        if (status == 401 || status == 403) {
-            ESP_LOGW(TAG, "API key rejected (HTTP %d)", status);
-            s_bad_key = true;
-            break;
+    int64_t now = now_ms();
+    for (int i = 0; c && i < s_n_syms && !blocked; i++) {
+        sym_t *s = &s_syms[i];
+        if (now < s->skip_until_ms) continue;
+        cJSON *q = cJSON_CreateObject();
+        bool ok = false, closed = false;
+        // The asset class that answered last time, else each in turn.
+        for (int k = 0; q && k < N_CLASSES && !ok && !blocked; k++) {
+            int a = s->asset >= 0 ? s->asset : k;
+            if (s->asset >= 0 && k > 0) break;
+            int st = get(c, rx, url, s->symbol, "info", a, false);
+            if (st == 403 || st == 429) {
+                ESP_LOGW(TAG, "Nasdaq refused (HTTP %d); backing off", st);
+                blocked = true;
+            } else if (st == 200 && !rx->overflow) {
+                ok = parse_quote(body, rx->len, phase, q, &closed);
+                if (ok) s->asset = (int8_t)a;
+            }
         }
-        if (status == 429) {
-            ESP_LOGW(TAG, "rate limited; backing off");
-            s_next_ms = now_ms() + RATE_LIMIT_S * 1000;
-            break;
+        if (!ok && !blocked) {
+            if (s->asset >= 0) {
+                s->asset = -1;  // try every class next time
+            } else {
+                ESP_LOGW(TAG, "%s: no quote from Nasdaq (unknown symbol?)", s->symbol);
+                s->skip_until_ms = now + UNKNOWN_SYMBOL_S * 1000;
+            }
         }
-        if (status != 200) {
-            ESP_LOGW(TAG, "%s: %s (HTTP %d)", s_syms[i], esp_err_to_name(err),
-                     status);
-            continue;
-        }
-        cJSON *q = cJSON_ParseWithLength(rx->buf, (size_t)rx->len);
-        // {"c": price, "d": change, "dp": change %, "pc": prev close, "t": ts};
-        // an unknown symbol comes back as all zeros.
-        double price = num(q, "c");
-        if (q && price > 0) {
-            cJSON *s = cJSON_CreateObject();
-            cJSON_AddStringToObject(s, "symbol", s_syms[i]);
-            cJSON_AddNumberToObject(s, "price", price);
-            cJSON_AddNumberToObject(s, "change", num(q, "d"));
-            cJSON_AddNumberToObject(s, "changePct", num(q, "dp"));
-            cJSON_AddStringToObject(s, "market", market);
-            cJSON_AddItemToArray(arr, s);
+        if (ok) {
+            // Today's chart for the sparkline, every few minutes.
+            if (!s->spark_ms || now - s->spark_ms >= CHART_REFRESH_S * 1000) {
+                if (get(c, rx, url, s->symbol, "chart", s->asset, true) == 200) {
+                    keep_spark(s, rx);
+                }
+                s->spark_ms = now;
+            }
+            cJSON_AddStringToObject(q, "symbol", s->symbol);
+            if (s->spark_n >= 2) {
+                cJSON_AddItemToObject(q, "spark",
+                                      cJSON_CreateFloatArray(s->spark, s->spark_n));
+            }
+            cJSON_AddItemToArray(arr, q);
             got++;
+            closed_n += closed;
+        } else {
+            cJSON_Delete(q);
         }
-        cJSON_Delete(q);
     }
     if (c) esp_http_client_cleanup(c);
+    if (blocked) s_next_ms = now_ms() + BLOCKED_S * 1000;
     if (got) {
-        double now = (double)time(NULL);
-        cJSON_AddNumberToObject(doc, "stocks_updated", now);
-        cJSON_AddNumberToObject(doc, "now", now);
+        s_all_closed = closed_n == got;
+        double t = (double)time(NULL);
+        cJSON_AddNumberToObject(doc, "stocks_updated", t);
+        cJSON_AddNumberToObject(doc, "now", t);
         dash_store_set_direct(doc);
         dashboard_data_updated();
         s_last_ok_ms = now_ms();
         dash_store_set_direct_quotes(true);
     }
     cJSON_Delete(doc);
+    free(pts);
+    free(body);
     free(url);
     free(rx);
     s_running = false;
@@ -321,7 +475,7 @@ void dash_quotes_tick(bool allowed) {
     if (s_last_ok_ms && now - s_last_ok_ms > (int64_t)OWN_WINDOW_S * 1000) {
         dash_store_set_direct_quotes(false);
     }
-    if (!allowed || s_running || !s_key[0] || s_bad_key || !s_n_syms) return;
+    if (!allowed || s_running || !s_n_syms) return;
     if (!s_now && now < s_next_ms) return;
     size_t free_b = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
@@ -345,10 +499,10 @@ void dash_quotes_tick(bool allowed) {
 void dash_quotes_status(char *buf, size_t n) {
     int64_t ago = s_last_ok_ms ? (now_ms() - s_last_ok_ms) / 1000 : -1;
     snprintf(buf, n,
-             "quotes key=%s%s syms=%d market=%s last_ok=%llds http=%d heap_skips=%d",
-             s_key[0] ? "set" : "missing", s_bad_key ? "(rejected)" : "",
-             s_n_syms, phase_label(market_phase()), (long long)ago,
-             s_last_status, s_heap_skips);
+             "quotes nasdaq syms=%d market=%s%s last_ok=%llds http=%d heap_skips=%d",
+             s_n_syms, phase_label(market_phase()),
+             s_all_closed ? "(closed)" : "", (long long)ago, s_last_status,
+             s_heap_skips);
 }
 
 #else  // !CONFIG_HOMEHUB_DASHBOARD_QUOTES
@@ -359,9 +513,7 @@ void dash_quotes_tick(bool allowed) {
     (void)allowed;
 }
 
-bool dash_quotes_configure(const char *key, const char *symbols,
-                           const char **err) {
-    (void)key;
+bool dash_quotes_configure(const char *symbols, const char **err) {
     (void)symbols;
     *err = "built without CONFIG_HOMEHUB_DASHBOARD_QUOTES";
     return false;

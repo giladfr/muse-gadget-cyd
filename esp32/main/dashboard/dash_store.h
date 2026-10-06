@@ -32,6 +32,7 @@ typedef struct {
     float history[DASH_HISTORY];  // oldest first; the last is `price`
     uint8_t history_n;
     int64_t history_us;  // when the newest history point was started
+    bool spark;          // history came from today's chart ("spark" field)
     int8_t moved;      // +1 / -1: price went up / down in the last update
     int64_t moved_us;  // when (esp_timer_get_time()), 0 = never
 } dash_stock_t;

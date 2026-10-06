@@ -562,9 +562,8 @@ void dashboard_calibrate(bool reset) {
     wake();
 }
 
-bool dashboard_quotes_configure(const char *key, const char *symbols,
-                                const char **err) {
-    bool ok = dash_quotes_configure(key, symbols, err);
+bool dashboard_quotes_configure(const char *symbols, const char **err) {
+    bool ok = dash_quotes_configure(symbols, err);
     if (ok) wake();
     return ok;
 }

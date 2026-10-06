@@ -281,6 +281,7 @@ int main(void) {
 // Stubs for the live-quotes module (its round task never runs here).
 esp_err_t esp_http_client_set_url(esp_http_client_handle_t c, const char *url) { return 0; }
 esp_err_t esp_http_client_perform(esp_http_client_handle_t c) { return -1; }
+esp_err_t esp_http_client_set_header(esp_http_client_handle_t c, const char *k, const char *v) { return 0; }
 esp_err_t esp_crt_bundle_attach(void *conf) { return 0; }
 esp_err_t nvs_get_str(nvs_handle_t h, const char *k, char *v, size_t *len) { return -1; }
 esp_err_t nvs_set_str(nvs_handle_t h, const char *k, const char *v) { return -1; }

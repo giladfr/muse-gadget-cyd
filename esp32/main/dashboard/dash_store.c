@@ -62,6 +62,19 @@ static int parse_stocks(const cJSON *arr, dash_stock_t *out) {
         st->change = get_num(it, "change", 0);
         st->change_pct = get_num(it, "changePct", 0);
         copy_str(st->market, sizeof(st->market), it, "market");
+        // Optional intraday chart, oldest first: becomes the sparkline.
+        const cJSON *sp = cJSON_GetObjectItemCaseSensitive(it, "spark");
+        int sn = cJSON_IsArray(sp) ? cJSON_GetArraySize(sp) : 0;
+        if (sn >= 2) {
+            int m = sn < DASH_HISTORY ? sn : DASH_HISTORY;
+            for (int k = 0; k < m; k++) {
+                const cJSON *v = cJSON_GetArrayItem(sp, (int)((int64_t)k * (sn - 1) / (m - 1)));
+                st->history[k] = cJSON_IsNumber(v) ? (float)v->valuedouble
+                                                   : (float)st->price;
+            }
+            st->history_n = (uint8_t)m;
+            st->spark = true;
+        }
         if (st->symbol[0]) n++;
     }
     return n;
@@ -80,10 +93,17 @@ static void merge_history(dash_stock_t *fresh, int n, const dash_store_t *s,
                 break;
             }
         }
-        if (old) {
+        if (old && !st->spark) {
             memcpy(st->history, old->history, sizeof(st->history));
             st->history_n = old->history_n;
             st->history_us = old->history_us;
+        }
+        if (st->spark) {
+            // Today's chart, with its tip at the current price.
+            st->history[st->history_n - 1] = (float)st->price;
+            st->history_us = now_us;
+        }
+        if (old) {
             st->moved = old->moved;
             st->moved_us = old->moved_us;
             if (st->price != old->price) {

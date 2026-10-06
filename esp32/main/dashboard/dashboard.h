@@ -38,10 +38,8 @@ bool dashboard_healthy(void);
 // Start the on-screen touch calibration, or with `reset` forget the saved one.
 void dashboard_calibrate(bool reset);
 
-// Live quotes (see dash_quotes.h): set the Finnhub key and/or watchlist
-// (NULL = keep; "" key = off), and a one-line status.
-bool dashboard_quotes_configure(const char *key, const char *symbols,
-                                const char **err);
+// Live quotes (see dash_quotes.h): set the watchlist, and a one-line status.
+bool dashboard_quotes_configure(const char *symbols, const char **err);
 void dashboard_quotes_status(char *buf, size_t n);
 
 // Firmware update progress (0..100) for the on-screen progress bar; -1 when
