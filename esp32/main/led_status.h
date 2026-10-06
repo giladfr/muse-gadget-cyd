@@ -86,10 +86,16 @@ void led_status_show_volume(int percent);
 
 // Dashboard mode (CONFIG_HOMEHUB_DASHBOARD): the dashboard task takes over
 // the screen from the status animation. While active, the animation, title
-// and bars are suppressed.
+// and bars are suppressed. Turning it on clears the screen the first time;
+// calling it again while on only ends image mode (the caller repaints).
 void dashboard_display_set_active(bool on);
 // Draw raw RGB565 pixels (high byte first) at (x, y). The buffer must be
 // DMA-capable. Only works while the dashboard is active.
 bool dashboard_display_draw(int x, int y, int w, int h, const uint16_t *pixels);
-// Clear the whole screen to black.
-void dashboard_display_clear(void);
+// Asynchronous variant: queue the transfer and return while it runs, so the
+// caller can fill another buffer. The panel stays locked and `pixels` must
+// not be touched until dashboard_display_draw_wait(), which must follow every
+// successful start.
+bool dashboard_display_draw_start(int x, int y, int w, int h,
+                                  const uint16_t *pixels);
+void dashboard_display_draw_wait(void);

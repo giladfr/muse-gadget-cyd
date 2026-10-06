@@ -1385,34 +1385,37 @@ void led_status_show_animation(void) {
 void dashboard_display_set_active(bool on) {
 #if CONFIG_HOMEHUB_DISPLAY
     if (!s_panel || !s_lcd_lock) {
-#if CONFIG_HOMEHUB_DASHBOARD
         ESP_LOGE("dash.display", "set_active(%d): no panel (display init failed?)",
                  on);
-#endif
         return;
     }
     xSemaphoreTake(s_lcd_lock, portMAX_DELAY);
+    bool was = s_dashboard_mode;
     s_dashboard_mode = on;
     if (on) {
+        // Leaving an image: the dashboard repaints the whole screen next, so
+        // only clear when the dashboard first takes over.
         s_image_mode = false;
-        lcd_clear_rows(0, LCD_V_RES);
+        if (!was) lcd_clear_rows(0, LCD_V_RES);
     }
     xSemaphoreGive(s_lcd_lock);
-#if CONFIG_HOMEHUB_DASHBOARD
-    ESP_LOGI("dash.display", "dashboard %s", on ? "ACTIVE, screen cleared" : "off");
-#endif
+    if (on != was) {
+        ESP_LOGI("dash.display", "dashboard %s", on ? "ACTIVE, screen cleared" : "off");
+    }
 #else
     (void)on;
 #endif
 }
 
+static bool dashboard_rect_ok(int x, int y, int w, int h) {
+    return x >= 0 && y >= 0 && w > 0 && h > 0
+        && x + w <= LCD_H_RES && y + h <= LCD_V_RES;
+}
+
 bool dashboard_display_draw(int x, int y, int w, int h, const uint16_t *pixels) {
 #if CONFIG_HOMEHUB_DISPLAY
     if (!s_panel || !s_lcd_lock || !s_dashboard_mode) return false;
-    if (x < 0 || y < 0 || w <= 0 || h <= 0
-        || x + w > LCD_H_RES || y + h > LCD_V_RES) {
-        return false;
-    }
+    if (!dashboard_rect_ok(x, y, w, h)) return false;
     xSemaphoreTake(s_lcd_lock, portMAX_DELAY);
     bool ok = lcd_draw(x, y, x + w, y + h, pixels);
     xSemaphoreGive(s_lcd_lock);
@@ -1423,11 +1426,28 @@ bool dashboard_display_draw(int x, int y, int w, int h, const uint16_t *pixels) 
 #endif
 }
 
-void dashboard_display_clear(void) {
-#if CONFIG_HOMEHUB_DISPLAY
-    if (!s_panel || !s_lcd_lock) return;
+bool dashboard_display_draw_start(int x, int y, int w, int h,
+                                  const uint16_t *pixels) {
+#if CONFIG_HOMEHUB_LED_BACKEND_CYD_ILI9341
+    if (!s_panel || !s_lcd_lock || !s_dashboard_mode) return false;
+    if (!dashboard_rect_ok(x, y, w, h)) return false;
+    // Held until dashboard_display_draw_wait(): nobody else may queue a
+    // transfer (or consume s_draw_done) while this one is in flight.
     xSemaphoreTake(s_lcd_lock, portMAX_DELAY);
-    lcd_clear_rows(0, LCD_V_RES);
+    if (esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h, pixels) != ESP_OK) {
+        xSemaphoreGive(s_lcd_lock);
+        return false;
+    }
+    return true;
+#else
+    (void)x; (void)y; (void)w; (void)h; (void)pixels;
+    return false;
+#endif
+}
+
+void dashboard_display_draw_wait(void) {
+#if CONFIG_HOMEHUB_LED_BACKEND_CYD_ILI9341
+    xSemaphoreTake(s_draw_done, portMAX_DELAY);
     xSemaphoreGive(s_lcd_lock);
 #endif
 }

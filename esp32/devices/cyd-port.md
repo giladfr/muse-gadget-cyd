@@ -16,7 +16,8 @@ board: `devices/sdkconfig.cyd`, `partitions_cyd_4mb.csv` and the
 | TFT DC | 2 | |
 | TFT RST | -1 | not connected on this board |
 | Backlight | 21 | driven high at boot (hard-wired on some variants) |
-| Touch (XPT2046) | shared SPI | not used in the status-screen path |
+| Touch (XPT2046) | CLK 25, MOSI 32, MISO 39, CS 33, IRQ 36 | own pins, bit-banged by the dashboard build |
+| SD card | SCK 18, MOSI 23, MISO 19, CS 5 | SPI3_HOST (VSPI), dashboard build only |
 | BOOT button | 0 | active low, setup/pairing button |
 | USB bridge | — | CH340 on most variants (CP210x on some): `usbserial`/`wchusbserial`/`ttyUSB*` |
 
@@ -34,8 +35,9 @@ board: `devices/sdkconfig.cyd`, `partitions_cyd_4mb.csv` and the
 - No PSRAM, so `CONFIG_HOMEHUB_TUNNEL=n`: no home-network tunnel and no
   network discovery, and voice notes go over Link's session with text-only
   replies (same tradeoff as the ideaspark).
-- Touch (XPT2046) is not driven: the status screen has no buttons to press
-  anyway; the physical BOOT button handles pairing.
+- Touch (XPT2046) is not driven by the plain status-screen build: it has no
+  buttons to press; the physical BOOT button handles pairing. The dashboard
+  build (`CONFIG_HOMEHUB_DASHBOARD`, see `../../DASHBOARD.md`) drives it.
 - 4 MB flash: the standard 8 MB partition table does not fit, so the board
   uses `partitions_cyd_4mb.csv` (two OTA app slots of 0x1E0000 each).
 

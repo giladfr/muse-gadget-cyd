@@ -1364,9 +1364,12 @@ static char *build_register_json(void) {
             cJSON *json_param = cJSON_CreateObject();
             cJSON_AddStringToObject(json_param, "type", "string");
             cJSON_AddStringToObject(json_param, "description",
-                                    "JSON data for the screen. For calendar: "
+                                    "JSON data for the screen, as a string or "
+                                    "directly as an object. For calendar: "
                                     "{\"label\": \"Tuesday, Oct 6\", \"events\": "
-                                    "[{\"time\": \"5:45 PM\", \"title\": \"...\"}]}.");
+                                    "[{\"time\": \"5:45 PM\", \"title\": \"...\"}]}. "
+                                    "For bridge: the dash.json document; an empty "
+                                    "stocks list keeps the last quotes.");
             cJSON_AddItemToObject(data_required, "json", json_param);
             add_command(commands, "dashboard.data",
                         "Push data to a dashboard screen. The screen redraws "

@@ -1556,7 +1556,11 @@ static void draw_url_done(const image_fetch_result_t *r, void *user) {
     }
     noise_ctrl_send_command_result(ctx->session_generation, ctx->request_id, result);
 #if CONFIG_HOMEHUB_DASHBOARD
-    if (r->ok) dashboard_takeover_begin();
+    if (r->ok) {
+        dashboard_takeover_begin();
+    } else {
+        dashboard_takeover_end();  // back from the pending takeover
+    }
 #endif
     free(ctx);
 }
@@ -1866,9 +1870,16 @@ static cJSON *on_ws_command(
         ctx->session_generation = session_generation;
         strncpy(ctx->request_id, request_id, sizeof(ctx->request_id) - 1);
         const char *code, *message;
+#if CONFIG_HOMEHUB_DASHBOARD
+        // Stop dashboard rendering before the first image rows arrive.
+        dashboard_takeover_prepare();
+#endif
         if (!image_fetch_start(url->valuestring, cJSON_IsNumber(row) ? row->valueint : IMAGE_FETCH_DEFAULT_ROW,
                                draw_url_done, ctx, &code, &message)) {
             free(ctx);
+#if CONFIG_HOMEHUB_DASHBOARD
+            dashboard_takeover_end();
+#endif
             return command_error(code, message);
         }
         cJSON *async = cJSON_CreateObject();
@@ -1888,12 +1899,20 @@ static cJSON *on_ws_command(
 #if CONFIG_HOMEHUB_DASHBOARD
     if (strcmp(command, "dashboard.data") == 0) {
         cJSON *screen = cJSON_GetObjectItem(params, "screen");
-        cJSON *json = cJSON_GetObjectItem(params, "json");
+        // The data as an object ("data", or "json"), or as a JSON string
+        // ("json") for older callers. An object skips the string escaping
+        // and the second parse.
+        cJSON *data = cJSON_GetObjectItem(params, "data");
+        if (!cJSON_IsObject(data)) data = cJSON_GetObjectItem(params, "json");
         if (!cJSON_IsString(screen) || !screen->valuestring
-            || !cJSON_IsString(json) || !json->valuestring) {
-            return command_error("missing_param", "screen and json are required");
+            || !(cJSON_IsObject(data)
+                 || (cJSON_IsString(data) && data->valuestring))) {
+            return command_error("missing_param", "screen and data are required");
         }
-        if (!dashboard_data_set(screen->valuestring, json->valuestring)) {
+        bool ok = cJSON_IsObject(data)
+            ? dashboard_data_set(screen->valuestring, data)
+            : dashboard_data_set_json(screen->valuestring, data->valuestring);
+        if (!ok) {
             return command_error("invalid_param", "unknown screen or bad JSON");
         }
         cJSON *result = cJSON_CreateObject();
@@ -1910,9 +1929,11 @@ static cJSON *on_ws_command(
         ctx->session_generation = session_generation;
         strncpy(ctx->request_id, request_id, sizeof(ctx->request_id) - 1);
         const char *code, *message;
+        dashboard_takeover_prepare();
         if (!image_fetch_start(url->valuestring, IMAGE_FETCH_DEFAULT_ROW,
                                draw_url_done, ctx, &code, &message)) {
             free(ctx);
+            dashboard_takeover_end();
             return command_error(code, message);
         }
         cJSON *async = cJSON_CreateObject();

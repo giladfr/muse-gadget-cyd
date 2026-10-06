@@ -11,8 +11,40 @@ Yellow Display") into a touch dashboard for Muse.
   (`dashboard.takeover` / `display.draw_url`); an **X** button dismisses the
   takeover and returns to the dashboard.
 - Stocks/weather come from a small bridge service on the home NAS
-  (`bridge/`), polled over plain HTTP — the board has no PSRAM for TLS.
-- OTA enabled; version 1.0.0. Future versions push from the cloud.
+  (`bridge/`): pushed through the cloud with `dashboard.data`, or polled by
+  the board over plain HTTP (`CONFIG_HOMEHUB_DASHBOARD_BRIDGE_POLL`) — the
+  board has no PSRAM for TLS.
+- OTA enabled; version in `esp32/version.txt` (1.0.6). Future versions push
+  from the cloud.
+
+## Hardware (ESP32-2432S028R)
+
+| Part | Pins | Driven by |
+|---|---|---|
+| ILI9341 display | SCK 14, MOSI 13, CS 15, DC 2, BL 21 | SPI2_HOST (`led_status.c`) |
+| XPT2046 touch | CLK 25, MOSI 32, MISO 39, CS 33, IRQ 36 | bit-banged (`dash_touch.c`) |
+| SD card | SCK 18, MOSI 23, MISO 19, CS 5 | SPI3_HOST (`sd_card.c`) |
+
+Touch and SD do **not** share the display's bus. If taps land in the wrong
+place, flip `CONFIG_HOMEHUB_DASHBOARD_TOUCH_SWAP_XY` / `_INVERT_X` /
+`_INVERT_Y` and check raw readings with `dashboard.debug`.
+
+## How it renders
+
+- The dashboard task is the only one that draws dashboard pixels; command
+  handlers and the image downloader change state and wake it.
+- It sleeps between events: the touch pen-down interrupt wakes it, it polls
+  at 10 ms only while a finger is down, and a 30 s tick refreshes the
+  header's age label.
+- Each frame is built once from a store snapshot, then painted in 4-row
+  strips, double-buffered so one strip is filled while the other is sent
+  over SPI DMA. Only the rows that changed are repainted (one stock row, or
+  just the header).
+- Colours are RGB565 stored high byte first, the panel's byte order
+  (`DASH_RGB` in `dash_draw.h`).
+- `display.draw_url`, `dashboard.takeover` and `display.draw_sd` stop the
+  dashboard before the first image rows arrive; a failed image returns to
+  the dashboard.
 
 ## Layout
 
@@ -38,7 +70,7 @@ tools/board.sh cyd build
 
 ```sh
 esptool.py --chip esp32 --port /dev/cu.usbserial-1230 write_flash \
-    0x0 cyd-dashboard-v1.0.0.bin
+    0x0 cyd-dashboard-v1.0.6.bin
 ```
 
 The board reboots, shows the status screen until paired, then the dashboard
@@ -58,7 +90,10 @@ Set `HOMEHUB_DASHBOARD_BRIDGE_URL` to `http://<nas-ip>:8080/dash.json`
 ## Commands (advertised to Muse)
 
 - `dashboard.data` `{screen: "calendar", json: "{...}"}` — push calendar events.
-- `dashboard.data` `{screen: "bridge", json: "{...}"}` — push stocks/weather.
+- `dashboard.data` `{screen: "bridge", json: "{...}"}` — push stocks/weather
+  (the output of `bridge/fetch.py`). `json` may also be an object, or passed
+  as `data`, which skips the string escaping. An empty `stocks` list or a
+  missing `weather` keeps the last good data on screen.
 - `dashboard.takeover` `{url}` — full-screen image with X dismiss.
 - `display.draw_url` — also enters takeover mode in dashboard builds.
 - `display.show_animation` — ends takeover, back to the dashboard.
@@ -76,7 +111,7 @@ screen /dev/cu.usbserial-1230 115200
 What to look for when the screen stays black:
 - `dash.display: set_active...` — the dashboard took over the panel.
 - `dash: dashboard init` / `dash: activating dashboard` — task lifecycle.
-- `dash.touch: XPT2046 ready` — touch controller answering.
+- `dash.touch: XPT2046 bit-bang CLK=25 ...` — touch pins set up.
 - `LED status ready: ... display (BL=21)` — panel + backlight init.
 - A Guru Meditation / panic trace — boot loop; capture the backtrace.
 - No output at all — check the USB cable (must be data, not charge-only)

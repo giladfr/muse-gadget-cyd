@@ -4,10 +4,9 @@
 #include "dash_store.h"
 
 #include <string.h>
-#include <time.h>
 
-#include "cJSON.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -16,20 +15,22 @@ static const char *TAG = "dash.store";
 static dash_store_t s_store;
 static SemaphoreHandle_t s_lock;
 
-static void ensure_lock(void) {
+static dash_store_t *store_lock(void) {
     if (!s_lock) {
         s_lock = xSemaphoreCreateMutex();
     }
-}
-
-dash_store_t *dash_store_lock(void) {
-    ensure_lock();
     xSemaphoreTake(s_lock, portMAX_DELAY);
     return &s_store;
 }
 
-void dash_store_unlock(void) {
+static void store_unlock(void) {
     xSemaphoreGive(s_lock);
+}
+
+void dash_store_snapshot(dash_store_t *out) {
+    dash_store_t *s = store_lock();
+    *out = *s;
+    store_unlock();
 }
 
 static void copy_str(char *dst, size_t n, const cJSON *obj, const char *key) {
@@ -42,130 +43,119 @@ static void copy_str(char *dst, size_t n, const cJSON *obj, const char *key) {
     }
 }
 
-bool dash_store_set_bridge(const char *json, size_t len) {
-    cJSON *root = cJSON_ParseWithLength(json, len);
-    if (!root) {
-        ESP_LOGW(TAG, "bridge JSON parse failed");
+static double get_num(const cJSON *obj, const char *key, double dflt) {
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return cJSON_IsNumber(v) ? v->valuedouble : dflt;
+}
+
+// Parse stocks into `out`; returns how many had a symbol.
+static int parse_stocks(const cJSON *arr, dash_stock_t *out) {
+    int n = 0;
+    const cJSON *it = NULL;
+    cJSON_ArrayForEach(it, arr) {
+        if (n >= DASH_MAX_STOCKS) break;
+        dash_stock_t *st = &out[n];
+        copy_str(st->symbol, sizeof(st->symbol), it, "symbol");
+        st->price = get_num(it, "price", 0);
+        st->change = get_num(it, "change", 0);
+        st->change_pct = get_num(it, "changePct", 0);
+        copy_str(st->market, sizeof(st->market), it, "market");
+        if (st->symbol[0]) n++;
+    }
+    return n;
+}
+
+static void parse_weather(const cJSON *w, dash_weather_t *wx) {
+    memset(wx, 0, sizeof(*wx));
+    wx->temp = (int)get_num(w, "temp", 0);
+    wx->feels = (int)get_num(w, "feels", 0);
+    wx->humidity = (int)get_num(w, "humidity", 0);
+    wx->wind = (int)get_num(w, "wind", 0);
+    copy_str(wx->desc, sizeof(wx->desc), w, "desc");
+    const cJSON *fc = cJSON_GetObjectItemCaseSensitive(w, "forecast");
+    const cJSON *it = NULL;
+    cJSON_ArrayForEach(it, fc) {
+        if (wx->forecast_n >= DASH_MAX_FORECAST) break;
+        dash_forecast_t *d = &wx->forecast[wx->forecast_n];
+        copy_str(d->day, sizeof(d->day), it, "day");
+        d->high = (int)get_num(it, "high", 0);
+        d->low = (int)get_num(it, "low", 0);
+        d->code = (int)get_num(it, "code", 0);
+        wx->forecast_n++;
+    }
+}
+
+bool dash_store_set_bridge(const cJSON *root) {
+    if (!cJSON_IsObject(root)) {
+        ESP_LOGW(TAG, "bridge data is not a JSON object");
         return false;
     }
-    dash_store_t *s = dash_store_lock();
+    // Parse outside the lock; only the copy-in is locked.
+    dash_stock_t stocks[DASH_MAX_STOCKS];
+    int n_stocks = 0;
+    const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "stocks");
+    if (cJSON_IsArray(arr)) n_stocks = parse_stocks(arr, stocks);
 
-    const cJSON *stocks = cJSON_GetObjectItemCaseSensitive(root, "stocks");
-    if (cJSON_IsArray(stocks)) {
-        s->n_stocks = 0;
-        const cJSON *it = NULL;
-        cJSON_ArrayForEach(it, stocks) {
-            if (s->n_stocks >= DASH_MAX_STOCKS) break;
-            dash_stock_t *st = &s->stocks[s->n_stocks];
-            copy_str(st->symbol, sizeof(st->symbol), it, "symbol");
-            const cJSON *p = cJSON_GetObjectItemCaseSensitive(it, "price");
-            const cJSON *c = cJSON_GetObjectItemCaseSensitive(it, "change");
-            const cJSON *cp = cJSON_GetObjectItemCaseSensitive(it, "changePct");
-            st->price = cJSON_IsNumber(p) ? p->valuedouble : 0;
-            st->change = cJSON_IsNumber(c) ? c->valuedouble : 0;
-            st->change_pct = cJSON_IsNumber(cp) ? cp->valuedouble : 0;
-            copy_str(st->market, sizeof(st->market), it, "market");
-            if (st->symbol[0]) s->n_stocks++;
-        }
-    }
-
+    dash_weather_t wx;
     const cJSON *w = cJSON_GetObjectItemCaseSensitive(root, "weather");
-    if (cJSON_IsObject(w)) {
-        dash_weather_t *wx = &s->weather;
-        const cJSON *t = cJSON_GetObjectItemCaseSensitive(w, "temp");
-        const cJSON *f = cJSON_GetObjectItemCaseSensitive(w, "feels");
-        const cJSON *h = cJSON_GetObjectItemCaseSensitive(w, "humidity");
-        const cJSON *wd = cJSON_GetObjectItemCaseSensitive(w, "wind");
-        wx->temp = cJSON_IsNumber(t) ? (int)t->valuedouble : 0;
-        wx->feels = cJSON_IsNumber(f) ? (int)f->valuedouble : 0;
-        wx->humidity = cJSON_IsNumber(h) ? (int)h->valuedouble : 0;
-        wx->wind = cJSON_IsNumber(wd) ? (int)wd->valuedouble : 0;
-        copy_str(wx->desc, sizeof(wx->desc), w, "desc");
-        wx->forecast_n = 0;
-        const cJSON *fc = cJSON_GetObjectItemCaseSensitive(w, "forecast");
-        if (cJSON_IsArray(fc)) {
-            const cJSON *it = NULL;
-            cJSON_ArrayForEach(it, fc) {
-                if (wx->forecast_n >= DASH_MAX_FORECAST) break;
-                dash_forecast_t *d = &wx->forecast[wx->forecast_n];
-                copy_str(d->day, sizeof(d->day), it, "day");
-                const cJSON *hi = cJSON_GetObjectItemCaseSensitive(it, "high");
-                const cJSON *lo = cJSON_GetObjectItemCaseSensitive(it, "low");
-                const cJSON *co = cJSON_GetObjectItemCaseSensitive(it, "code");
-                d->high = cJSON_IsNumber(hi) ? (int)hi->valuedouble : 0;
-                d->low = cJSON_IsNumber(lo) ? (int)lo->valuedouble : 0;
-                d->code = cJSON_IsNumber(co) ? (int)co->valuedouble : 0;
-                wx->forecast_n++;
-            }
-        }
+    bool have_wx = cJSON_IsObject(w);
+    if (have_wx) parse_weather(w, &wx);
+
+    // Quote age at arrival: the bridge's clock (`now`, falling back to the
+    // time the document was built) minus when the quotes were fetched
+    // (`stocks_updated`, falling back to the combined `updated`).
+    int64_t age_at_rx = 0;
+    double fetched = get_num(root, "stocks_updated", get_num(root, "updated", 0));
+    double now = get_num(root, "now", 0);
+    if (fetched > 0 && now > fetched) age_at_rx = (int64_t)(now - fetched);
+
+    dash_store_t *s = store_lock();
+    if (n_stocks > 0) {
+        memcpy(s->stocks, stocks, sizeof(stocks[0]) * (size_t)n_stocks);
+        s->n_stocks = n_stocks;
+        s->stocks_age_at_rx_s = age_at_rx;
+        s->stocks_rx_us = esp_timer_get_time();
+        if (s->stocks_rx_us == 0) s->stocks_rx_us = 1;
+    }
+    if (have_wx) {
+        s->weather = wx;
         s->weather_valid = true;
     }
+    int total = s->n_stocks;
+    bool wx_ok = s->weather_valid;
+    store_unlock();
 
-    const cJSON *u = cJSON_GetObjectItemCaseSensitive(root, "updated");
-    if (cJSON_IsNumber(u)) {
-        s->updated_ts = (int64_t)u->valuedouble;
-        s->updated_ticks = (int64_t)xTaskGetTickCount();
-    }
-
-    dash_store_unlock();
-    cJSON_Delete(root);
-    ESP_LOGI(TAG, "bridge data: %d stocks, weather %s", s->n_stocks,
-             s->weather_valid ? "ok" : "missing");
+    ESP_LOGI(TAG, "bridge data: %d new stocks (%d shown, %llds old), weather %s",
+             n_stocks, total, (long long)age_at_rx,
+             have_wx ? "updated" : (wx_ok ? "kept" : "missing"));
     return true;
 }
 
-bool dash_store_set_calendar(const char *json, size_t len) {
-    cJSON *root = cJSON_ParseWithLength(json, len);
-    if (!root) {
-        ESP_LOGW(TAG, "calendar JSON parse failed");
+bool dash_store_set_calendar(const cJSON *root) {
+    if (!cJSON_IsObject(root)) {
+        ESP_LOGW(TAG, "calendar data is not a JSON object");
         return false;
     }
-    dash_store_t *s = dash_store_lock();
+    dash_store_t *s = store_lock();
     copy_str(s->events_label, sizeof(s->events_label), root, "label");
     s->n_events = 0;
     const cJSON *evs = cJSON_GetObjectItemCaseSensitive(root, "events");
-    if (cJSON_IsArray(evs)) {
-        const cJSON *it = NULL;
-        cJSON_ArrayForEach(it, evs) {
-            if (s->n_events >= DASH_MAX_EVENTS) break;
-            dash_event_t *e = &s->events[s->n_events];
-            copy_str(e->time, sizeof(e->time), it, "time");
-            copy_str(e->title, sizeof(e->title), it, "title");
-            if (e->title[0]) s->n_events++;
-        }
+    const cJSON *it = NULL;
+    cJSON_ArrayForEach(it, evs) {
+        if (s->n_events >= DASH_MAX_EVENTS) break;
+        dash_event_t *e = &s->events[s->n_events];
+        copy_str(e->time, sizeof(e->time), it, "time");
+        copy_str(e->title, sizeof(e->title), it, "title");
+        if (e->title[0]) s->n_events++;
     }
-    dash_store_unlock();
-    cJSON_Delete(root);
-    ESP_LOGI(TAG, "calendar data: %d events", s->n_events);
+    int n = s->n_events;
+    store_unlock();
+    ESP_LOGI(TAG, "calendar data: %d events", n);
     return true;
 }
 
-int64_t dash_store_age_s(void) {
-    dash_store_t *s = dash_store_lock();
-    int64_t age;
-    if (s->updated_ts == 0) {
-        age = INT64_MAX;
-    } else {
-        int64_t dt_ticks = (int64_t)xTaskGetTickCount() - s->updated_ticks;
-        age = dt_ticks / configTICK_RATE_HZ;
-    }
-    dash_store_unlock();
-    return age;
-}
-
-// America/Chicago is UTC-6 (CST) / UTC-5 (CDT). We approximate with a fixed
-// -6h offset plus a crude DST guess; the label is informational only.
-void dash_store_day_label(char *out, size_t out_len) {
-    static const char *days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-    dash_store_t *s = dash_store_lock();
-    time_t t = (time_t)(s->updated_ts ? s->updated_ts - 6 * 3600 : 0);
-    dash_store_unlock();
-    if (!t) {
-        strncpy(out, "---", out_len - 1);
-        out[out_len - 1] = '\0';
-        return;
-    }
-    struct tm tmv;
-    gmtime_r(&t, &tmv);
-    snprintf(out, out_len, "%s", days[tmv.tm_wday % 7]);
+int64_t dash_store_stocks_age_s(const dash_store_t *s) {
+    if (s->stocks_rx_us == 0) return INT64_MAX;
+    int64_t since_rx = (esp_timer_get_time() - s->stocks_rx_us) / 1000000;
+    return s->stocks_age_at_rx_s + since_rx;
 }

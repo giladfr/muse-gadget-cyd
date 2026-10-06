@@ -1,12 +1,14 @@
 /*
- * Dashboard data store: stocks, weather, calendar events, and a wall-clock
- * estimate derived from the bridge's `updated` timestamp.
+ * Dashboard data store: stocks, weather and calendar events, plus how fresh
+ * the stock quotes are.
  */
 #pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "cJSON.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,23 +56,26 @@ typedef struct {
     dash_event_t events[DASH_MAX_EVENTS];
     int n_events;
     char events_label[32];  // e.g. "Tuesday, Oct 6"
-    int64_t updated_ts;     // bridge `updated`, unix seconds
-    int64_t updated_ticks;  // xTaskGetTickCount() when updated arrived
+    // Quote freshness: how old the quotes already were when they arrived
+    // (bridge `now` - `stocks_updated`), and when they arrived
+    // (esp_timer_get_time()). stocks_rx_us == 0 means no quotes yet.
+    int64_t stocks_age_at_rx_s;
+    int64_t stocks_rx_us;
 } dash_store_t;
 
-// Singleton, mutex-guarded. Copy out under lock, then render.
-dash_store_t *dash_store_lock(void);
-void dash_store_unlock(void);
+// Copy the whole store out under its lock.
+void dash_store_snapshot(dash_store_t *out);
 
-// Replace stocks/weather from bridge JSON. Returns false on parse failure.
-bool dash_store_set_bridge(const char *json, size_t len);
-// Replace calendar events from dashboard.data JSON.
-bool dash_store_set_calendar(const char *json, size_t len);
+// Merge bridge JSON ({"stocks": [...], "weather": {...}, ...}). A missing or
+// empty "stocks" array and a missing "weather" object keep the previous data,
+// so a failed upstream fetch never blanks the screen. Returns false if the
+// document is not an object.
+bool dash_store_set_bridge(const cJSON *root);
+// Replace calendar events ({"label": "...", "events": [...]}).
+bool dash_store_set_calendar(const cJSON *root);
 
-// Seconds since the bridge data arrived (INT64_MAX if never).
-int64_t dash_store_age_s(void);
-// Weekday name ("Tue") for the bridge's `updated` date, in America/Chicago.
-void dash_store_day_label(char *out, size_t out_len);
+// Age of the quotes in a snapshot, in seconds; INT64_MAX if there are none.
+int64_t dash_store_stocks_age_s(const dash_store_t *s);
 
 #ifdef __cplusplus
 }

@@ -275,20 +275,53 @@ menu "ESP32 Device SDK"
             Plain-HTTP URL the dashboard polls for stocks/weather JSON.
             Must be plain HTTP: this board has no PSRAM for a TLS download.
 
+    config HOMEHUB_DASHBOARD_TOUCH_CLK
+        int "XPT2046 touch CLK GPIO"
+        depends on HOMEHUB_DASHBOARD
+        default 25
+        help
+            The XPT2046 has its own pins on the 2432S028R (it does not share
+            the display's SPI bus); the driver bit-bangs them.
+
+    config HOMEHUB_DASHBOARD_TOUCH_MOSI
+        int "XPT2046 touch MOSI (DIN) GPIO"
+        depends on HOMEHUB_DASHBOARD
+        default 32
+
+    config HOMEHUB_DASHBOARD_TOUCH_MISO
+        int "XPT2046 touch MISO (DOUT) GPIO"
+        depends on HOMEHUB_DASHBOARD
+        default 39
+
     config HOMEHUB_DASHBOARD_TOUCH_CS
         int "XPT2046 touch CS GPIO"
         depends on HOMEHUB_DASHBOARD
         default 33
-        help
-            Chip-select GPIO for the XPT2046 resistive touch controller.
-            Shares the display's SPI bus (SCK 14, MOSI 13, MISO 12).
 
     config HOMEHUB_DASHBOARD_TOUCH_IRQ
         int "XPT2046 touch IRQ GPIO"
         depends on HOMEHUB_DASHBOARD
         default 36
         help
-            Interrupt GPIO for the XPT2046 touch controller (active low).
+            Pen-down interrupt (active low). Wakes the dashboard task.
+
+    config HOMEHUB_DASHBOARD_TOUCH_SWAP_XY
+        bool "Touch: swap X and Y"
+        depends on HOMEHUB_DASHBOARD
+        default n
+        help
+            Flip these if taps land in the wrong place; check the raw
+            readings with the dashboard.debug command.
+
+    config HOMEHUB_DASHBOARD_TOUCH_INVERT_X
+        bool "Touch: invert X"
+        depends on HOMEHUB_DASHBOARD
+        default n
+
+    config HOMEHUB_DASHBOARD_TOUCH_INVERT_Y
+        bool "Touch: invert Y"
+        depends on HOMEHUB_DASHBOARD
+        default n
 
     config HOMEHUB_DASHBOARD_BRIDGE_POLL
         bool "Poll the bridge URL from the device"
@@ -301,11 +334,28 @@ menu "ESP32 Device SDK"
             by the image downloader.
 
     config HOMEHUB_SDCARD
-        bool "Enable SD card (SDSPI on display SPI bus)"
+        bool "Enable SD card (SDSPI on its own SPI bus)"
+        depends on HOMEHUB_DASHBOARD
         default y
         help
-            Mount the CYD's SD card slot at /sdcard via SDSPI. The slot
-            shares the display/touch SPI bus; only the CS pin differs.
+            Mount the CYD's SD card slot at /sdcard via SDSPI on SPI3_HOST.
+            On the 2432S028R the slot is on the VSPI pins, separate from the
+            display's bus.
+
+    config HOMEHUB_SDCARD_SCK
+        int "SD card SCK GPIO"
+        depends on HOMEHUB_SDCARD
+        default 18
+
+    config HOMEHUB_SDCARD_MOSI
+        int "SD card MOSI GPIO"
+        depends on HOMEHUB_SDCARD
+        default 23
+
+    config HOMEHUB_SDCARD_MISO
+        int "SD card MISO GPIO"
+        depends on HOMEHUB_SDCARD
+        default 19
 
     config HOMEHUB_SDCARD_CS
         int "SD card CS GPIO"

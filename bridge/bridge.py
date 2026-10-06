@@ -7,7 +7,9 @@ same LAN), polls Nasdaq (stocks) and Open-Meteo (weather) over HTTPS,
 and re-serves one compact JSON document over plain HTTP.
 
 Endpoints:
-    GET /dash.json  -> {"stocks": [...], "weather": {...}, "updated": <unix ts>}
+    GET /dash.json  -> {"stocks": [...], "weather": {...},
+                        "stocks_updated": ts, "weather_updated": ts,
+                        "updated": ts, "now": ts}
     GET /health      -> {"ok": true}
 
 Config via env:
@@ -17,8 +19,10 @@ Config via env:
     TZ          weather timezone (default: America/Chicago)
 
 Resilience: a failed upstream fetch never crashes the service and never
-wipes the cache -- the last good data keeps being served. Clients can
-judge staleness from the "updated" unix timestamp (0 = no data yet).
+wipes the cache -- the last good data keeps being served. Each feed has its
+own unix timestamp (0 = no data yet); "now" is the bridge's clock when the
+document was built, so a client without a clock can work out the age as
+now - stocks_updated. "updated" is the newer of the two, for old clients.
 """
 
 import concurrent.futures
@@ -39,6 +43,8 @@ LON = os.environ.get("LON", "-97.7431")
 TZ = os.environ.get("TZ", "America/Chicago")
 
 STOCK_POLL_S = 30
+# When every quote says the market is closed, prices don't move: poll slowly.
+STOCK_POLL_CLOSED_S = 10 * 60
 WEATHER_POLL_S = 15 * 60
 FETCH_TIMEOUT_S = 12
 
@@ -46,8 +52,12 @@ NASDAQ_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X) "
              "AppleWebKit/605.1.15 Safari/605.1.15")
 ASSET_CLASSES = ("stocks", "etf", "index")
 
-_state = {"stocks": [], "weather": None, "updated": 0}
+_state = {"stocks": [], "weather": None,
+          "stocks_updated": 0, "weather_updated": 0}
 _lock = threading.Lock()
+# symbol -> the Nasdaq asset class that answered last time, so ETFs and
+# indexes don't cost a failed "stocks" lookup on every poll.
+_asset_class = {}
 
 
 # ---------------------------------------------------------------- fetching
@@ -75,21 +85,15 @@ def _num(value):
         return None
 
 
-def _clean_company(name, symbol):
-    cleaned = name or symbol
-    for pat in (r"\s+(Class [A-Z]\s+)?(Common Stock|Ordinary Shares|Common Shares)$",
-                r"\s+American Depositary Shares.*$",
-                r",?\s+(Inc|Corp|Corporation|Ltd|Limited|Co|plc|N\.V|S\.A)\.?$"):
-        cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
-    cleaned = cleaned.strip()
-    return cleaned or symbol
-
-
 def _fetch_quote(symbol):
-    """One symbol via Nasdaq. Tries stocks -> etf -> index asset classes."""
+    """One symbol via Nasdaq. Tries the asset class that worked last time,
+    then stocks -> etf -> index."""
     headers = {"User-Agent": NASDAQ_UA,
                "Accept": "application/json, text/plain, */*"}
-    for asset in ASSET_CLASSES:
+    known = _asset_class.get(symbol)
+    order = ((known,) if known else ()) + tuple(
+        a for a in ASSET_CLASSES if a != known)
+    for asset in order:
         try:
             url = ("https://api.nasdaq.com/api/quote/%s/info?assetclass=%s"
                    % (urllib.request.quote(symbol), asset))
@@ -99,9 +103,11 @@ def _fetch_quote(symbol):
             price = _num(primary.get("lastSalePrice"))
             if price is None:
                 continue  # wrong asset class or bad payload; try next
+            _asset_class[symbol] = asset
+            # Only what the board draws: every byte is pushed through the
+            # cloud as an escaped string and parsed on a no-PSRAM board.
             return {
                 "symbol": symbol,
-                "name": _clean_company(data.get("companyName"), symbol),
                 "price": round(price, 2),
                 "change": _num(primary.get("netChange")) or 0.0,
                 "changePct": _num(primary.get("percentageChange")) or 0.0,
@@ -164,7 +170,6 @@ def _fetch_weather():
             "high": int(round(highs[i])),
             "low": int(round(lows[i])),
             "code": int(codes[i]),
-            "desc": _wx_desc(codes[i]),
         })
     code = cur.get("weather_code")
     return {
@@ -181,21 +186,45 @@ def _fetch_weather():
 
 # ---------------------------------------------------------------- poll loops
 
+def fetch_quotes():
+    """All watchlist quotes, in watchlist order. Failed symbols are left out."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        quotes = [q for q in ex.map(_fetch_quote, WATCHLIST) if q]
+    order = {s: i for i, s in enumerate(WATCHLIST)}
+    quotes.sort(key=lambda q: order.get(q["symbol"], 99))
+    return quotes
+
+
+def market_closed(quotes):
+    return bool(quotes) and all(q["market"].lower() == "closed" for q in quotes)
+
+
+def document(stocks, weather, stocks_updated, weather_updated):
+    """The dash.json document the board reads."""
+    return {
+        "stocks": stocks,
+        "weather": weather,
+        "stocks_updated": stocks_updated,
+        "weather_updated": weather_updated,
+        "updated": max(stocks_updated, weather_updated),
+        "now": int(time.time()),
+    }
+
+
 def _poll_stocks():
     while True:
+        delay = STOCK_POLL_S
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-                quotes = [q for q in ex.map(_fetch_quote, WATCHLIST) if q]
+            quotes = fetch_quotes()
             if quotes:  # keep last good data if every fetch failed
                 with _lock:
-                    # preserve watchlist order
-                    order = {s: i for i, s in enumerate(WATCHLIST)}
-                    quotes.sort(key=lambda q: order.get(q["symbol"], 99))
                     _state["stocks"] = quotes
-                    _state["updated"] = int(time.time())
+                    _state["stocks_updated"] = int(time.time())
+                if market_closed(quotes):
+                    delay = STOCK_POLL_CLOSED_S
         except Exception:
             pass  # never die; try again next round
-        time.sleep(STOCK_POLL_S)
+        time.sleep(delay)
 
 
 def _poll_weather():
@@ -204,7 +233,7 @@ def _poll_weather():
             wx = _fetch_weather()
             with _lock:
                 _state["weather"] = wx
-                _state["updated"] = int(time.time())
+                _state["weather_updated"] = int(time.time())
         except Exception:
             pass
         time.sleep(WEATHER_POLL_S)
@@ -216,7 +245,7 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = "dash-bridge/1.0"
 
     def _send(self, obj, status=200):
-        body = json.dumps(obj).encode("utf-8")
+        body = json.dumps(obj, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -228,7 +257,10 @@ class _Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/dash.json":
             with _lock:
-                self._send(dict(_state))
+                doc = document(_state["stocks"], _state["weather"],
+                               _state["stocks_updated"],
+                               _state["weather_updated"])
+            self._send(doc)
         elif path == "/health":
             self._send({"ok": True})
         else:

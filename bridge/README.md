@@ -31,32 +31,40 @@ WATCHLIST=AMD,NVDA,TSLA docker compose up -d
 ```json
 {
   "stocks": [
-    {"symbol": "AMD", "name": "Advanced Micro Devices",
-     "price": 631.75, "change": -2.16, "changePct": -0.34,
+    {"symbol": "AMD", "price": 631.75, "change": -2.16, "changePct": -0.34,
      "market": "Closed"}
   ],
   "weather": {
     "temp": 78, "feels": 80, "desc": "Partly cloudy", "code": 2,
     "humidity": 55, "wind": 8,
     "forecast": [
-      {"day": "Today", "high": 85, "low": 66, "code": 2, "desc": "Partly cloudy"},
-      {"day": "Tue",   "high": 87, "low": 68, "code": 0, "desc": "Clear"}
+      {"day": "Today", "high": 85, "low": 66, "code": 2},
+      {"day": "Tue",   "high": 87, "low": 68, "code": 0}
     ]
   },
-  "updated": 1728000000
+  "stocks_updated": 1728000000,
+  "weather_updated": 1727999400,
+  "updated": 1728000000,
+  "now": 1728000012
 }
 ```
 
 - `stocks` refreshes every 30 s from Nasdaq's quote API
-  (`api.nasdaq.com/api/quote/{sym}/info`), trying asset classes
-  stocks → etf → index, so ETFs (SPY, QQQ) and indexes work too.
+  (`api.nasdaq.com/api/quote/{sym}/info`), and every 10 min while every
+  quote says the market is closed. Each symbol remembers which asset class
+  (stocks / etf / index) answered, so ETFs (SPY, QQQ) cost one request.
 - `weather` refreshes every 15 min from Open-Meteo (Austin TX,
   imperial units). `code` is the Open-Meteo weather code; `desc` is a
   short human label.
-- `updated` is a unix timestamp of the last successful refresh of
-  either feed (`0` = no data yet). A failed upstream fetch never wipes
-  the cache — the last good data keeps being served, so the board can
-  treat a stale `updated` as "showing old data".
+- `stocks_updated` / `weather_updated` are unix timestamps of each feed's
+  last successful refresh (`0` = no data yet); `updated` is the newer of the
+  two, for older clients. `now` is the bridge's clock when the document was
+  built, so the board (which has no clock) shows the quotes' age as
+  `now - stocks_updated` plus the time since it received them.
+- A failed upstream fetch never wipes the cache — the last good data keeps
+  being served.
+- Only fields the board draws are sent: the document goes through the
+  cloud as an escaped string and is parsed on a board without PSRAM.
 
 ### `GET /health`
 
@@ -66,10 +74,11 @@ WATCHLIST=AMD,NVDA,TSLA docker compose up -d
 
 ## How the ESP32 uses it
 
-The firmware polls `http://<nas-ip>:8080/dash.json` every 30–60 seconds
-with a plain HTTP GET (no TLS), parses the JSON with cJSON, and renders
-the stocks and weather screens. If `updated` is older than ~10 minutes
-(or 0), it shows a small "stale" indicator instead of blanking the data.
+Normally a cloud cron runs `fetch.py` and pushes its output with
+`dashboard.data screen="bridge"`. With `CONFIG_HOMEHUB_DASHBOARD_BRIDGE_POLL`
+the board instead GETs `http://<nas-ip>:8080/dash.json` every 60 seconds
+(plain HTTP, no TLS; a 4 KB buffer). The stocks header shows `live` for
+quotes under 90 s old, then `Nm ago` / `Nh ago`.
 
 ## Config
 

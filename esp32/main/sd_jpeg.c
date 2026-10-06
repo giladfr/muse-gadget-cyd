@@ -60,11 +60,9 @@ static UINT sd_jpeg_out(JDEC *jd, void *bitmap, JRECT *rect) {
                       | (rgb[2] >> 3);
         j->mcu[i] = (uint16_t)((px >> 8) | (px << 8));
     }
-    if (led_status_draw_rect(j->x0 + rect->left, j->y0 + rect->top,
-                             w, h, j->mcu) != 0) {
-        return 0;
-    }
-    return 1;
+    // led_status_draw_rect() returns true on success; 0 aborts the decode.
+    return led_status_draw_rect(j->x0 + rect->left, j->y0 + rect->top,
+                                w, h, j->mcu) ? 1 : 0;
 }
 
 const char *sd_jpeg_show(const char *path) {
@@ -86,6 +84,9 @@ const char *sd_jpeg_show(const char *path) {
         return "out of memory";
     }
 
+    // Keep the dashboard off the screen while the image is drawn.
+    dashboard_takeover_prepare();
+
     const char *err = NULL;
     JDEC jd;
     JRESULT rc = jd_prepare(&jd, sd_jpeg_in, pool, JPEG_POOL_BYTES, &j);
@@ -101,14 +102,21 @@ const char *sd_jpeg_show(const char *path) {
         } else {
             j.x0 = (j.width - w) / 2;
             j.y0 = (j.height - h) / 2;
-            // Clear to black behind the image.
-            static uint16_t black[320 * 8];
-            memset(black, 0, sizeof(black));
-            for (int y = 0; y < j.height; y += 8) {
-                int rows = j.height - y < 8 ? j.height - y : 8;
-                led_status_draw_rect(0, y, j.width, rows, black);
+            // Clear to black around a smaller image, a few rows at a time
+            // (led_status_draw_rect copies, so any buffer will do).
+            if (w < j.width || h < j.height) {
+                const int rows = 4;
+                uint16_t *black = calloc((size_t)j.width * rows, sizeof(uint16_t));
+                if (!black) err = "out of memory";
+                for (int y = 0; black && y < j.height && !err; y += rows) {
+                    int n = j.height - y < rows ? j.height - y : rows;
+                    if (!led_status_draw_rect(0, y, j.width, n, black)) {
+                        err = "display write failed";
+                    }
+                }
+                free(black);
             }
-            rc = jd_decomp(&jd, sd_jpeg_out, scale);
+            if (!err) rc = jd_decomp(&jd, sd_jpeg_out, scale);
         }
     }
     if (!err && rc != JDR_OK) {
@@ -117,7 +125,10 @@ const char *sd_jpeg_show(const char *path) {
     }
     free(pool);
     fclose(f);
-    if (err) return err;
+    if (err) {
+        dashboard_takeover_end();
+        return err;
+    }
 
     ESP_LOGI(TAG, "showing %s, entering takeover", full);
     dashboard_takeover_begin();

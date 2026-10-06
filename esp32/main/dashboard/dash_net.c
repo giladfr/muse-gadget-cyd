@@ -3,9 +3,12 @@
  */
 #include "dash_net.h"
 
+#include <stdlib.h>
 #include <string.h>
 
+#include "cJSON.h"
 #include "dash_store.h"
+#include "dashboard.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -14,55 +17,53 @@
 static const char *TAG = "dash.net";
 
 #define POLL_INTERVAL_MS (60 * 1000)
-#define MAX_BODY (24 * 1024)
+// The bridge document is ~1.5 KB; anything much bigger is not ours.
+#define MAX_BODY (4 * 1024)
 
 static TaskHandle_t s_task;
-static volatile bool s_poll_now;
-
-typedef struct {
-    char *buf;
-    size_t len;
-} dl_t;
-
-static esp_err_t on_data(esp_http_client_event_t *e) {
-    dl_t *d = e->user_data;
-    if (e->event_id == HTTP_EVENT_ON_DATA && d->len + e->data_len < MAX_BODY) {
-        memcpy(d->buf + d->len, e->data, e->data_len);
-        d->len += e->data_len;
-    }
-    return ESP_OK;
-}
 
 static void poll_once(void) {
-    char *buf = malloc(MAX_BODY + 1);
-    if (!buf) return;
-    dl_t d = {.buf = buf, .len = 0};
     esp_http_client_config_t cfg = {
         .url = CONFIG_HOMEHUB_DASHBOARD_BRIDGE_URL,
-        .event_handler = on_data,
-        .user_data = &d,
-        .timeout_ms = 8000,
-        .buffer_size = 1024,
+        .timeout_ms = 5000,
+        .buffer_size = 512,
         .disable_auto_redirect = true,
     };
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
-    bool ok = false;
-    if (c) {
-        if (esp_http_client_perform(c) == ESP_OK
-            && esp_http_client_get_status_code(c) == 200) {
-            buf[d.len] = '\0';
-            ok = dash_store_set_bridge(buf, d.len);
-        } else {
-            ESP_LOGW(TAG, "bridge poll failed: %d",
-                     c ? esp_http_client_get_status_code(c) : -1);
+    if (!c) return;
+    char *buf = NULL;
+    int len = 0;
+    int status = -1;
+    if (esp_http_client_open(c, 0) == ESP_OK) {
+        int64_t clen = esp_http_client_fetch_headers(c);
+        status = esp_http_client_get_status_code(c);
+        if (status == 200 && clen <= MAX_BODY) {
+            // Content-Length when the bridge sends it, else the cap.
+            int cap = clen > 0 ? (int)clen : MAX_BODY;
+            buf = malloc((size_t)cap + 1);
+            while (buf && len < cap) {
+                int n = esp_http_client_read(c, buf + len, cap - len);
+                if (n <= 0) break;
+                len += n;
+            }
         }
-        esp_http_client_cleanup(c);
+        esp_http_client_close(c);
+    }
+    esp_http_client_cleanup(c);
+
+    bool ok = false;
+    if (buf && len > 0) {
+        cJSON *root = cJSON_ParseWithLength(buf, (size_t)len);
+        if (root) {
+            ok = dash_store_set_bridge(root);
+            cJSON_Delete(root);
+        }
     }
     free(buf);
     if (ok) {
-        // Wake the dashboard to redraw.
-        extern void dashboard_data_updated(void);
         dashboard_data_updated();
+    } else {
+        ESP_LOGW(TAG, "bridge poll failed (HTTP %d, %d bytes)", status, len);
     }
 }
 
@@ -72,13 +73,8 @@ static void poll_task(void *arg) {
     vTaskDelay(pdMS_TO_TICKS(5000));
     for (;;) {
         poll_once();
-        for (int waited = 0; waited < POLL_INTERVAL_MS / 500; waited++) {
-            if (s_poll_now) {
-                s_poll_now = false;
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(500));
-        }
+        // Sleep until the next poll, or until dash_net_poll_now().
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(POLL_INTERVAL_MS));
     }
 }
 
@@ -88,5 +84,5 @@ void dash_net_start(void) {
 }
 
 void dash_net_poll_now(void) {
-    s_poll_now = true;
+    if (s_task) xTaskNotifyGive(s_task);
 }

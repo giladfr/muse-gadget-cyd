@@ -19,8 +19,9 @@
 #
 # Pin map (the common community documentation for this board, e.g. the
 # TFT_eSPI "ESP32 2432S028" setups): TFT MOSI=13, MISO=12, CLK=14, CS=15,
-# DC=2, RST=n/c, backlight=21. The XPT2046 touch controller shares the TFT
-# SPI bus but is not used by the status-screen path.
+# DC=2, RST=n/c, backlight=21. The XPT2046 touch controller is on its own
+# pins (CLK=25, MOSI=32, MISO=39, CS=33, IRQ=36; bit-banged by the dashboard)
+# and the SD slot on the VSPI pins (SCK=18, MOSI=23, MISO=19, CS=5).
 CONFIG_IDF_TARGET="esp32"
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
@@ -83,6 +84,9 @@ CONFIG_HOMEHUB_TUNNEL=n
 # Dashboard fork: touch dashboard mode (stocks/weather/calendar + takeover).
 CONFIG_HOMEHUB_DASHBOARD=y
 CONFIG_HOMEHUB_DASHBOARD_BRIDGE_URL="http://192.168.1.100:8080/dash.json"
+CONFIG_HOMEHUB_DASHBOARD_TOUCH_CLK=25
+CONFIG_HOMEHUB_DASHBOARD_TOUCH_MOSI=32
+CONFIG_HOMEHUB_DASHBOARD_TOUCH_MISO=39
 CONFIG_HOMEHUB_DASHBOARD_TOUCH_CS=33
 CONFIG_HOMEHUB_DASHBOARD_TOUCH_IRQ=36
 
@@ -90,4 +94,7 @@ CONFIG_HOMEHUB_DASHBOARD_TOUCH_IRQ=36
 # the cloud. The two OTA slots are 0x1E0000 (~1.79 MB) each.
 CONFIG_HOMEHUB_OTA_ENABLED=y
 CONFIG_HOMEHUB_SDCARD=y
+CONFIG_HOMEHUB_SDCARD_SCK=18
+CONFIG_HOMEHUB_SDCARD_MOSI=23
+CONFIG_HOMEHUB_SDCARD_MISO=19
 CONFIG_HOMEHUB_SDCARD_CS=5
