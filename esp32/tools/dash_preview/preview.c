@@ -21,6 +21,7 @@
 #include "esp_wifi.h"
 #include "nvs.h"
 #include "esp_crt_bundle.h"
+#include "noise_control.h"
 #include "led_status.h"
 #include "dashboard.h"
 
@@ -263,6 +264,47 @@ int main(void) {
     g_t0_us -= 31LL * 1000000;  // let it time out
     settle(800);
 
+    // Muse's own cards: a question with buttons, then a status card.
+    {
+        cJSON *c = cJSON_Parse("{\"id\":\"groceries\",\"title\":\"Groceries\",\"sub\":\"Tuesday order\",\"tone\":\"accent\","
+            "\"text\":\"Your usual order is ready: milk, eggs, sourdough, bananas and coffee beans. Place it for delivery tomorrow 9-11 AM?\","
+            "\"rows\":[{\"label\":\"Total\",\"value\":\"$64.20\",\"detail\":\"5 items\"}],"
+            "\"buttons\":[{\"id\":\"yes\",\"label\":\"Order\",\"say\":\"Yes, place the usual grocery order for tomorrow 9-11.\"},"
+            "{\"id\":\"later\",\"label\":\"Later\"},{\"id\":\"no\",\"label\":\"Skip\",\"say\":\"Skip groceries this week.\"}],"
+            "\"show\":true}");
+        const char *err = "";
+        if (!dashboard_card(c, &err)) printf("card failed: %s\n", err);
+        cJSON_Delete(c);
+        settle(600);
+        snap("card_question");
+        tap(52, 202);  // "Order"
+        settle(400);
+        snap("card_tapped");
+        cJSON *ev = dashboard_events(false);
+        char *evs = cJSON_PrintUnformatted(ev);
+        printf("events: %s\n", evs ? evs : "?");
+        cJSON_Delete(ev);
+        free(evs);
+
+        c = cJSON_Parse("{\"id\":\"day\",\"title\":\"Your day\",\"sub\":\"so far\",\"show\":true,\"rows\":["
+            "{\"label\":\"Steps\",\"value\":\"6,240\",\"detail\":\"goal 10,000\",\"progress\":62,\"tone\":\"up\"},"
+            "{\"label\":\"Focus time\",\"value\":\"2h 40m\",\"detail\":\"3 sessions\",\"progress\":67,\"tone\":\"blue\"},"
+            "{\"label\":\"Inbox\",\"value\":\"14\",\"detail\":\"3 need a reply\",\"tone\":\"accent\",\"spark\":[22,19,25,30,18,16,14]},"
+            "{\"label\":\"Build\",\"value\":\"failing\",\"detail\":\"main, 12 min ago\",\"tone\":\"down\"}]}");
+        if (!dashboard_card(c, &err)) printf("card failed: %s\n", err);
+        cJSON_Delete(c);
+        settle(700);
+        snap("card_rows");
+
+        c = cJSON_Parse("{\"text\":\"Package delivered\",\"detail\":\"Front porch, 10:41 AM - from Amazon\",\"level\":\"success\"}");
+        if (!dashboard_notify(c, &err)) printf("notify failed: %s\n", err);
+        cJSON_Delete(c);
+        settle(500);
+        snap("banner");
+        tap(160, 20);  // dismiss
+        settle(400);
+    }
+
     // Takeover: a fake photo + X.
     dashboard_takeover_prepare();
     pthread_mutex_lock(&fbm);
@@ -286,3 +328,20 @@ esp_err_t esp_crt_bundle_attach(void *conf) { return 0; }
 esp_err_t nvs_get_str(nvs_handle_t h, const char *k, char *v, size_t *len) { return -1; }
 esp_err_t nvs_set_str(nvs_handle_t h, const char *k, const char *v) { return -1; }
 void vTaskDelete(TaskHandle_t t) {}
+
+// A fake Link session: chat sends are acknowledged at once.
+static noise_ctrl_req_cb s_req_cb; static void *s_req_ctx;
+static char s_sent_body[512];
+bool noise_ctrl_is_connected(void) { return true; }
+int64_t noise_ctrl_req_open(const char *verb, const char *path, const char *const *headers, bool end_body, noise_ctrl_req_cb cb, void *ctx) {
+    s_req_cb = cb; s_req_ctx = ctx;
+    printf("chat: %s %s\n", verb, path);
+    return 42;
+}
+bool noise_ctrl_req_send(int64_t id, const void *data, size_t len, bool end_body, int wait_ms) {
+    snprintf(s_sent_body, sizeof s_sent_body, "%.*s", (int)len, (const char *)data);
+    printf("chat body: %s\n", s_sent_body);
+    s_req_cb(s_req_ctx, 200, (const uint8_t *)"{\"id\":\"m1\"}", 11, true);
+    return true;
+}
+void noise_ctrl_req_cancel(int64_t id) {}

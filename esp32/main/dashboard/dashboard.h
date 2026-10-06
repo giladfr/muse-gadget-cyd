@@ -42,6 +42,13 @@ void dashboard_calibrate(bool reset);
 bool dashboard_quotes_configure(const char *symbols, const char **err);
 void dashboard_quotes_status(char *buf, size_t n);
 
+// Muse-defined cards and banners (dash_cards.h) and the taps they produce
+// (dash_events.h). False with *err on bad input.
+bool dashboard_card(const cJSON *card, const char **err);
+bool dashboard_notify(const cJSON *n, const char **err);
+// Queued taps as a JSON array; `clear` removes them.
+cJSON *dashboard_events(bool clear);
+
 // Firmware update progress (0..100) for the on-screen progress bar; -1 when
 // the update failed (back to the dashboard).
 void dashboard_ota_progress(int pct);

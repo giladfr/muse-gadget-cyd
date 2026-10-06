@@ -52,6 +52,8 @@ set(DASHBOARD_SRCS
     "dashboard/dash_icons.c"
     "dashboard/dash_assets.c"
     "dashboard/dash_quotes.c"
+    "dashboard/dash_cards.c"
+    "dashboard/dash_events.c"
 )
 
 set(GADGET_REQUIRES

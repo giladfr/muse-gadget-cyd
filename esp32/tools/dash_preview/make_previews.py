@@ -11,7 +11,8 @@ from PIL import Image
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "out"
 SCREENS = ["stocks", "weather", "calendar", "stocks_compact", "calendar_compact",
-           "stocks_empty", "update", "calibrate", "takeover"]
+           "stocks_empty", "card_question", "card_tapped", "card_rows",
+           "banner", "update", "calibrate", "takeover"]
 
 
 def load(name):

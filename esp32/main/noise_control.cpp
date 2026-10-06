@@ -94,6 +94,14 @@ static char s_noise_host[256] = NOISE_DEFAULT_HOST;
 #define SMALL_CONTROL_SESSION 0
 #endif
 
+// Extra daemon requests on this session (noise_ctrl_req_*): Muse builds, and
+// the CYD dashboard, which sends button taps to Muse as chat messages. The
+// dashboard only sends (it never subscribes to replies), so it keeps the
+// regular inbound scratch; like other boards without PSRAM it keeps the
+// outbound request backlog small.
+#define NOISE_REQUESTS (CONFIG_MUSE_ENABLED || CONFIG_HOMEHUB_DASHBOARD_MUSE_CHAT)
+#define REQ_LEAN (SMALL_CONTROL_SESSION || !CONFIG_SPIRAM)
+
 // Max inbound service frame scratch. Daemon control responses are modest JSON,
 // but the tunnel stream (multiplexed on this session) carries ~8 KB IP-packet
 // batches, so scratch must fit a full batch plus ServiceFrame/envelope overhead.
@@ -910,7 +918,7 @@ static bool tunnel_send_body(void *vctx, const uint8_t *data, size_t len) {
 // ---- Extra daemon requests (noise_ctrl_req_*) --------------------------------
 
 // Only Muse opens these; Link-only gateways get the empty stubs below.
-#if CONFIG_MUSE_ENABLED
+#if NOISE_REQUESTS
 
 // Stream ids from here up belong to these requests; lower ids are Link's own.
 #define REQ_STREAM_BASE 16
@@ -919,7 +927,7 @@ static bool tunnel_send_body(void *vctx, const uint8_t *data, size_t len) {
 #define REQ_MAX_HEADERS 6
 // Body bytes queued at once. Without PSRAM a larger backlog leaves no block big
 // enough for mbedTLS's per-write record buffer, and the session drops.
-#define REQ_QUEUE_BYTES (SMALL_CONTROL_SESSION ? 4096 : 16384)
+#define REQ_QUEUE_BYTES (REQ_LEAN ? 4096 : 16384)
 // Largest free block a request send needs: the TLS record plus overhead.
 #define REQ_TLS_BLOCK   (CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN + 512)
 
@@ -1042,7 +1050,7 @@ static bool req_pump_tx(esp_tls_t *tls, ClientSession &session,
     int32_t queued = s_req_queued_bytes;
     if (!noise_tx_has_dma_headroom_reclaiming(queued > 0 ? (size_t)queued : 0)
         || !noise_tx_has_contiguous_dma_headroom()) return true;
-    if (SMALL_CONTROL_SESSION
+    if (REQ_LEAN
         && heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < REQ_TLS_BLOCK) return true;
     req_op op;
     if (!req_take(&op)) return true;
@@ -1109,7 +1117,7 @@ static void req_init(void) {
 static void req_init(void) {}
 static void req_end_all(void) {}
 static bool req_on_frame(const DecodedServiceFrame &) { return false; }
-#endif  // CONFIG_MUSE_ENABLED
+#endif  // NOISE_REQUESTS
 
 // ---- Agent identity ----------------------------------------------------------
 
@@ -1406,6 +1414,57 @@ static char *build_register_json(void) {
                         "(no API key) during market hours: set the watchlist "
                         "(saved on the device), or with no params report status.",
                         nullptr, stocks_optional);
+            {
+                cJSON *card_required = cJSON_CreateObject();
+                cJSON_AddItemToObject(card_required, "id",
+                                      string_param("Card id; the same id replaces it."));
+                cJSON *card_optional = cJSON_CreateObject();
+                cJSON_AddItemToObject(card_optional, "json",
+                                      string_param(
+                                          "All card fields as a JSON object (or string): "
+                                          "{\"id\", \"title\", \"sub\", \"text\" (wrapped, "
+                                          "~4 lines), \"tone\" (up|down|accent|blue|dim), "
+                                          "\"rows\": [{\"label\", \"value\", \"detail\", "
+                                          "\"tone\", \"progress\" 0-100, \"spark\": [numbers]}] "
+                                          "(up to 5), \"buttons\": [{\"id\", \"label\", "
+                                          "\"say\"}] (up to 3; a tap sends \"say\" to you as a "
+                                          "chat message), \"ttl_s\", \"show\": true to switch to "
+                                          "it, \"remove\": true to delete}."));
+                cJSON_AddItemToObject(card_optional, "title", string_param("Card title."));
+                cJSON_AddItemToObject(card_optional, "text",
+                                      string_param("A paragraph, wrapped to ~4 lines."));
+                add_command(commands, "dashboard.card",
+                            "Show your own screen on the dashboard (up to 4, after "
+                            "stocks/weather/calendar): text, rows with values, "
+                            "progress bars and sparklines, and buttons the user can "
+                            "tap to answer you. Kept until removed or ttl_s.",
+                            card_required, card_optional);
+                cJSON *notify_required = cJSON_CreateObject();
+                cJSON_AddItemToObject(notify_required, "text",
+                                      string_param("Headline, one line."));
+                cJSON *notify_optional = cJSON_CreateObject();
+                cJSON_AddItemToObject(notify_optional, "detail",
+                                      string_param("Second line."));
+                cJSON_AddItemToObject(notify_optional, "level",
+                                      string_param("info | success | warning | alert"));
+                cJSON_AddItemToObject(notify_optional, "card",
+                                      string_param("Card id a tap opens."));
+                add_command(commands, "dashboard.notify",
+                            "Show a short notification banner over the dashboard "
+                            "(20 s, or ttl_s; 0 keeps it until tapped). Wakes a "
+                            "dimmed screen.",
+                            notify_required, notify_optional);
+                cJSON *events_optional = cJSON_CreateObject();
+                cJSON *peek_param = cJSON_CreateObject();
+                cJSON_AddStringToObject(peek_param, "type", "boolean");
+                cJSON_AddStringToObject(peek_param, "description",
+                                        "Leave them queued.");
+                cJSON_AddItemToObject(events_optional, "peek", peek_param);
+                add_command(commands, "dashboard.events",
+                            "Button taps on your cards not yet collected (also sent "
+                            "to you as chat messages when possible).",
+                            nullptr, events_optional);
+            }
             add_command(commands, "dashboard.calibrate",
                         "Show the touch calibration screen (tap three targets; "
                         "saved on the device). Holding a finger on the screen "
@@ -2289,7 +2348,7 @@ static session_result_t run_session(stack_monitor_t *stack) {
             }
         }
 
-#if CONFIG_MUSE_ENABLED
+#if NOISE_REQUESTS
         {
             bool sent = false;
             if (!req_pump_tx(tls, session, svc_scratch, env_scratch, ws_buf, &sent)) {
@@ -2534,7 +2593,7 @@ extern "C" void noise_ctrl_send_command_result(
     queue_result(session_generation, request_id, result);
 }
 
-#if CONFIG_MUSE_ENABLED
+#if NOISE_REQUESTS
 extern "C" int64_t noise_ctrl_req_open(const char *verb, const char *path,
                                        const char *const *headers, bool end_body,
                                        noise_ctrl_req_cb cb, void *ctx) {
@@ -2597,4 +2656,4 @@ extern "C" void noise_ctrl_req_cancel(int64_t id) {
     req_op op = {req_op_kind::Cancel, false, id, nullptr, 0, nullptr, nullptr};
     req_put(op, pdMS_TO_TICKS(100));
 }
-#endif  // CONFIG_MUSE_ENABLED
+#endif  // NOISE_REQUESTS

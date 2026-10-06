@@ -15,7 +15,9 @@
 #include <string.h>
 
 #include "dash_backlight.h"
+#include "dash_cards.h"
 #include "dash_clock.h"
+#include "dash_events.h"
 #include "dash_draw.h"
 #include "dash_net.h"
 #include "dash_quotes.h"
@@ -62,7 +64,7 @@ typedef enum {
 // Guarded by s_lock (s_state is also read without it by the renderer, which
 // only needs to notice that it changed).
 static volatile dash_state_t s_state = DASH_OFF;
-static dash_screen_t s_screen = DASH_SCREEN_STOCKS;
+static int s_screen = DASH_SCREEN_STOCKS;  // or DASH_SCREEN_COUNT + card
 static int s_slide = 0;          // pending screen change: -1 / +1
 static bool s_paired = false;
 static bool s_link = false;
@@ -229,8 +231,46 @@ static void wifi_status(dash_status_t *st) {
 
 // ---- touch ------------------------------------------------------------------
 
-static dash_screen_t step(dash_screen_t s, int d) {
-    return (dash_screen_t)((s + DASH_SCREEN_COUNT + d) % DASH_SCREEN_COUNT);
+static int step(int s, int d) {
+    int total = dash_screen_total();
+    return (s + total + d) % total;
+}
+
+// A tap on the current frame's card buttons or banner. True if it was one.
+static bool handle_card_tap(dash_touch_t t) {
+    int hit = dash_screen_hit(t.x, t.y);
+    if (hit == DASH_HIT_BANNER) {
+        dash_banner_t b;
+        int card = -1;
+        if (dash_screen_banner(&b) && b.card[0]) card = dash_cards_find(b.card);
+        dash_banner_dismiss();
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (card >= 0) {
+            int target = DASH_SCREEN_COUNT + card;
+            s_slide = target > s_screen ? 1 : -1;
+            s_screen = target;
+        }
+        s_changed = true;
+        xSemaphoreGive(s_lock);
+        return true;
+    }
+    if (hit < 0) return false;
+    const char *id, *title;
+    const dash_card_button_t *buttons;
+    int n;
+    if (!dash_screen_card(&id, &title, &buttons, &n) || hit >= n) return false;
+    char cid[16];
+    snprintf(cid, sizeof(cid), "%s", id);
+    // Pressed look first: Muse's acknowledgement can arrive (on the session
+    // task) before dash_events_button() returns, and must not be overwritten.
+    dash_cards_set_pressed(cid, hit, "Sending...");
+    const char *status = dash_events_button(cid, title, buttons[hit].id,
+                                            buttons[hit].label, buttons[hit].say);
+    if (strcmp(status, "Sending...") != 0) dash_cards_set_status(cid, status);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_changed = true;
+    xSemaphoreGive(s_lock);
+    return true;
 }
 
 static void show_calibration(const char *msg, const char *hint, bool target) {
@@ -303,6 +343,7 @@ static void handle_touch(dash_touch_t t) {
         calibrate_begin();
         return;
     }
+    if (t.type == DASH_TOUCH_TAP && handle_card_tap(t)) return;
     int d = 0;
     if (t.type == DASH_TOUCH_SWIPE_LEFT) {
         d = 1;
@@ -370,7 +411,7 @@ static void dash_task(void *arg) {
 
         xSemaphoreTake(s_lock, portMAX_DELAY);
         dash_state_t st = s_state;
-        dash_screen_t sc = s_screen;
+        int sc = s_screen;
         int slide = s_slide;
         bool full = s_full, changed = s_changed, restore = s_restore;
         bool draw_x = s_draw_x, cal = s_cal_start, ota_dirty = s_ota_dirty;
@@ -383,6 +424,19 @@ static void dash_task(void *arg) {
         s_ota_dirty = false;
         xSemaphoreGive(s_lock);
         int64_t now = now_ms();
+        if (dash_cards_tick()) {
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            s_changed = true;
+            xSemaphoreGive(s_lock);
+            changed = true;
+        }
+        // A removed card can't stay on screen.
+        if (sc >= dash_screen_total()) {
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            s_screen = sc = DASH_SCREEN_STOCKS;
+            xSemaphoreGive(s_lock);
+            full = true;
+        }
         // Live quotes: quiet while an image or firmware is downloading.
         dash_quotes_tick(st != DASH_PENDING && st != DASH_UPDATING);
 
@@ -635,12 +689,51 @@ void dashboard_data_updated(void) {
     if (s_lock) mark_changed();
 }
 
+bool dashboard_card(const cJSON *card, const char **err) {
+    bool show = false;
+    if (!s_lock || !dash_cards_set(card, &show, err)) {
+        if (!s_lock) *err = "dashboard not running";
+        return false;
+    }
+    const cJSON *id = cJSON_GetObjectItemCaseSensitive(card, "id");
+    int index = cJSON_IsString(id) ? dash_cards_find(id->valuestring) : -1;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (show && index >= 0 && s_state == DASH_ACTIVE) {
+        int target = DASH_SCREEN_COUNT + index;
+        if (target != s_screen) {
+            s_slide = target > s_screen ? 1 : -1;
+            s_screen = target;
+        }
+    }
+    s_changed = true;
+    xSemaphoreGive(s_lock);
+    if (show) dash_backlight_activity();
+    wake();
+    return true;
+}
+
+bool dashboard_notify(const cJSON *n, const char **err) {
+    if (!s_lock) {
+        *err = "dashboard not running";
+        return false;
+    }
+    if (!dash_banner_push(n, err)) return false;
+    dash_backlight_activity();  // a notification is worth lighting up for
+    mark_changed();
+    return true;
+}
+
+cJSON *dashboard_events(bool clear) {
+    return dash_events_take(clear);
+}
+
 void dashboard_debug(char *buf, size_t n) {
-    char t[112], b[64], q[112];
+    char t[112], b[64], q[112], e[80];
     dash_touch_debug(t, sizeof(t));
     dash_backlight_debug(b, sizeof(b));
     dash_quotes_status(q, sizeof(q));
-    snprintf(buf, n, "%s | %s | %s | state=%d free=%u block=%u", t, b, q,
+    dash_events_status(e, sizeof(e));
+    snprintf(buf, n, "%s | %s | %s | %s | state=%d free=%u block=%u", t, b, q, e,
              (int)s_state,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));

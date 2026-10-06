@@ -1982,6 +1982,29 @@ static cJSON *on_ws_command(
         cJSON_AddStringToObject(result, "status", status);
         return result;
     }
+    if (strcmp(command, "dashboard.card") == 0
+        || strcmp(command, "dashboard.notify") == 0) {
+        // The fields directly, or all of them in "json" (an object or a JSON
+        // string), which is how rows and buttons (arrays) get through.
+        cJSON *json = cJSON_GetObjectItem(params, "json");
+        cJSON *parsed = cJSON_IsString(json) ? cJSON_Parse(json->valuestring) : NULL;
+        const cJSON *obj = parsed ? parsed : cJSON_IsObject(json) ? json : params;
+        const char *err = "bad parameters";
+        bool ok = strcmp(command, "dashboard.card") == 0 ? dashboard_card(obj, &err)
+                                                         : dashboard_notify(obj, &err);
+        cJSON_Delete(parsed);
+        if (!ok) return command_error("invalid_param", err);
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
+    if (strcmp(command, "dashboard.events") == 0) {
+        cJSON *peek = cJSON_GetObjectItem(params, "peek");
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        cJSON_AddItemToObject(result, "events", dashboard_events(!cJSON_IsTrue(peek)));
+        return result;
+    }
     if (strcmp(command, "dashboard.calibrate") == 0) {
         cJSON *reset = cJSON_GetObjectItem(params, "reset");
         dashboard_calibrate(cJSON_IsTrue(reset));

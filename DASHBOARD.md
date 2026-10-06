@@ -25,9 +25,12 @@ itself back.
 - **Data:** live stock quotes fetched by the board itself during market
   hours (Nasdaq, no API key); weather and the calendar pushed by Muse with
   `dashboard.data`. Nothing runs anywhere except the board and Muse's VM.
+- **Muse's own screens:** up to 4 cards (text, rows with progress bars and
+  sparklines, buttons) and notification banners. A button tap goes back to
+  Muse as a chat message, so Muse can ask and you answer with one tap.
 - **Over the air:** firmware (`device.ota`) and SD-card files (`sd.fetch`).
 
-Version: `esp32/version.txt` (1.3.0).
+Version: `esp32/version.txt` (1.4.0).
 
 ## Preview without a board
 
@@ -128,6 +131,8 @@ and only if the SHA-256 matches when one is given. Then e.g.
 - `dashboard.calibrate` `{reset?}`: touch calibration screen (or forget it).
 - `dashboard.debug`: touch raw/pressure, light sensor, backlight, state, free
   heap.
+- `dashboard.card`, `dashboard.notify`, `dashboard.events {peek?}`: see
+  "Cards, banners and taps".
 - `dashboard.stocks` `{symbols?}`: live-quote watchlist and status.
 - `device.ota` `{url, force?}`, `sd.fetch`: see above.
 
@@ -160,6 +165,32 @@ can trim elsewhere.
 
 `tools/dash_preview/run.sh` also runs `quotes_test.c`: a full round against
 DeskPulse's Nasdaq fixtures, no network.
+
+## Cards, banners and taps
+
+Muse can add its own screens without a firmware update. The skill in
+`skills/gadget-cyd-desk-dashboard/SKILL.md` teaches Muse how (point Muse at
+it); the short version:
+
+- `dashboard.card {"json": {id, title, sub?, text?, tone?, rows?, buttons?,
+  ttl_s?, show?}}`: up to 4 cards after the built-in screens. Rows (up to 5)
+  have `label`, `value`, `detail`, `tone` (up/down/accent/blue/dim),
+  `progress` 0-100 and `spark` (numbers). Buttons (up to 3) have `id`,
+  `label` and `say`. Same `id` replaces; `"remove": true` deletes.
+- `dashboard.notify {text, detail?, level?, card?, ttl_s?}`: a one-line
+  banner in place of the header for 20 s; a tap dismisses it or opens `card`.
+- A button tap shows the button pressed and sends `[Desk display] <say>` to
+  Muse as a text turn over the board's existing Link session
+  (`POST /chat/stream` on the VM, the way Muse's own boards send text; no
+  extra connection). The board only sends; Muse answers in the app or by
+  updating the card ("Sent to Muse" appears under its title). Every tap is
+  also queued for `dashboard.events`, in case the chat path is unavailable.
+  `CONFIG_HOMEHUB_DASHBOARD_MUSE_CHAT` (default y) turns the chat send on,
+  which also compiles the session's request streams for this build.
+
+Untested on hardware: whether this VM accepts a text turn from the CYD the
+way it does from Muse's own boards. `dashboard.debug` shows `events ...
+sent= acked= failed= http=`; if `failed` grows, use `dashboard.events`.
 
 ## Weather from the Muse VM
 

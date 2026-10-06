@@ -437,6 +437,18 @@ menu "ESP32 Device SDK"
             Each refresh is one request per symbol to Nasdaq; at least 2 s per
             symbol is enforced to stay polite (and unblocked).
 
+    config HOMEHUB_DASHBOARD_MUSE_CHAT
+        bool "Send card button taps to Muse as chat messages"
+        depends on HOMEHUB_DASHBOARD
+        default y
+        help
+            A tap on a dashboard.card button becomes a text turn on the board's
+            existing Link session (POST /chat/stream on the VM, as Muse's own
+            boards send them). Send-only: replies arrive in the Muse app, or as
+            Muse updating the board. Taps are also queued for dashboard.events
+            either way. Turning this on also compiles the session's request
+            streams (noise_ctrl_req_*) for this build.
+
     config HOMEHUB_DASHBOARD_BRIDGE_POLL
         bool "Poll the bridge URL from the device"
         depends on HOMEHUB_DASHBOARD

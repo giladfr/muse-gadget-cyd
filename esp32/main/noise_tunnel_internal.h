@@ -58,7 +58,7 @@ bool noise_tx_has_dma_headroom(size_t *dma_free);
 
 // The same margin, counting `reclaimable` bytes the send itself frees (Muse's
 // queued request payloads; on boards without PSRAM they are DMA-capable too).
-// Muse builds only.
+// Muse builds and the CYD dashboard (noise_ctrl_req_*).
 bool noise_tx_has_dma_headroom_reclaiming(size_t reclaimable);
 
 // Small contiguous AES-allocation floor, independent of the total-free burst

@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "dash_cards.h"
 #include "dash_clock.h"
 #include "dash_draw.h"
 #include "dash_icons.h"
@@ -49,7 +50,12 @@
 #define FLASH_MS 1500
 #define FLASH_LEVELS 5
 
-#define SCREEN_MESSAGE DASH_SCREEN_COUNT
+#define SCREEN_MESSAGE (-1)
+// A banner takes the header's place while it shows.
+#define BANNER_H DASH_CONTENT_Y0
+// Card button bar.
+#define BUTTON_H 30
+#define CARD_TEXT_LINES 4
 
 typedef struct {
     char symbol[12];
@@ -75,7 +81,11 @@ typedef struct {
 
 typedef struct {
     bool valid;
-    int screen;      // dash_screen_t or SCREEN_MESSAGE
+    int screen;      // dash_screen_t, a card (DASH_SCREEN_COUNT + i), or
+                     // SCREEN_MESSAGE
+    int total;       // screens in the rotation, for the page dots
+    bool has_banner;
+    dash_banner_t banner;
     // Header.
     char title[24];
     char sub[32];    // dim subtitle after the title
@@ -110,6 +120,11 @@ typedef struct {
             int n;
         } cal;
         struct {
+            dash_card_t c;
+            char lines[CARD_TEXT_LINES][64];
+            int n_lines;
+        } card;
+        struct {
             char msg[48];
             char hint[48];
             int cx, cy;
@@ -118,11 +133,17 @@ typedef struct {
     } u;
 } frame_t;
 
+static uint16_t tone_color(int tone);
+
 static frame_t s_frames[2];
 static frame_t *s_frame = &s_frames[0];
 static frame_t *s_prev = &s_frames[1];
 static dash_store_t s_snap;  // static: keeps ~2 KB off the task stack
 static bool s_animating;
+
+int dash_screen_total(void) {
+    return DASH_SCREEN_COUNT + dash_cards_count();
+}
 
 const char *dash_screen_name(dash_screen_t s) {
     switch (s) {
@@ -329,6 +350,58 @@ static void build_calendar(frame_t *f, const dash_store_t *st) {
     f->u.cal.n = shown;
 }
 
+// Word-wrap `text` into up to CARD_TEXT_LINES lines of at most max_w pixels;
+// the last line gets "..." if the text doesn't fit.
+static int wrap(const dash_font_t *font, const char *text, int max_w,
+                char lines[][64]) {
+    int n = 0;
+    const char *p = text;
+    while (*p && n < CARD_TEXT_LINES) {
+        while (*p == ' ') p++;
+        // Longest prefix that fits, broken at a space when possible.
+        char line[64];
+        int len = 0, brk = -1;
+        while (p[len] && p[len] != '\n' && len < 63) {
+            line[len] = p[len];
+            line[len + 1] = '\0';
+            if (dash_text_w(font, line) > max_w) break;
+            if (p[len] == ' ') brk = len;
+            len++;
+        }
+        bool more = p[len] && p[len] != '\n';
+        if (more && brk > 0) len = brk;
+        bool last = n == CARD_TEXT_LINES - 1;
+        memcpy(line, p, (size_t)len);
+        line[len] = '\0';
+        if (last && (more || p[len] == '\n')) {
+            char rest[sizeof(((dash_card_t *)0)->text)];
+            snprintf(rest, sizeof(rest), "%s", p);
+            dash_text_fit(font, line, sizeof(line), rest, max_w);
+        }
+        memcpy(lines[n++], line, sizeof(line));
+        p += len;
+        if (*p == '\n') p++;
+    }
+    return n;
+}
+
+static void build_card(frame_t *f, int index) {
+    if (!dash_cards_get(index, &f->u.card.c)) {
+        f->empty = true;
+        snprintf(f->empty_msg, sizeof(f->empty_msg), "Card removed");
+        return;
+    }
+    const dash_card_t *c = &f->u.card.c;
+    snprintf(f->title, sizeof(f->title), "%s", c->title);
+    set_sub(f, c->status[0] ? c->status : c->sub);
+    if (c->text[0]) {
+        f->u.card.n_lines = wrap(F_BODY, c->text, DASH_W - 2 * MARGIN - 20,
+                                 f->u.card.lines);
+    }
+    f->empty = !c->text[0] && !c->n_rows && !c->n_buttons;
+    if (f->empty) snprintf(f->empty_msg, sizeof(f->empty_msg), "Empty card");
+}
+
 // ---- row geometry -----------------------------------------------------------
 
 static int rows_for(const frame_t *f) {
@@ -392,11 +465,12 @@ static void begin_frame(int screen, const char *title) {
     snprintf(s_frame->title, sizeof(s_frame->title), "%s", title);
 }
 
-void dash_screen_prepare(dash_screen_t s, const dash_status_t *st, bool full,
-                         int *y0, int *y1) {
+void dash_screen_prepare(int s, const dash_status_t *st, bool full, int *y0,
+                         int *y1) {
     dash_store_snapshot(&s_snap);
-    begin_frame(s, dash_screen_name(s));
+    begin_frame(s, s < DASH_SCREEN_COUNT ? dash_screen_name((dash_screen_t)s) : "");
     s_animating = false;
+    s_frame->total = dash_screen_total();
     build_header(s_frame, st);
     switch (s) {
         case DASH_SCREEN_STOCKS:
@@ -404,13 +478,20 @@ void dash_screen_prepare(dash_screen_t s, const dash_status_t *st, bool full,
             break;
         case DASH_SCREEN_WEATHER: build_weather(s_frame, &s_snap); break;
         case DASH_SCREEN_CALENDAR: build_calendar(s_frame, &s_snap); break;
-        default: break;
+        default: build_card(s_frame, s - DASH_SCREEN_COUNT); break;
     }
+    s_frame->has_banner = dash_banner_current(&s_frame->banner);
 
     *y0 = *y1 = 0;
-    if (full || !s_prev->valid || s_prev->screen != (int)s) {
+    if (full || !s_prev->valid || s_prev->screen != s
+        || s_prev->total != s_frame->total) {
         *y1 = DASH_H;
         return;
+    }
+    if (s_prev->has_banner != s_frame->has_banner
+        || (s_frame->has_banner
+            && memcmp(&s_prev->banner, &s_frame->banner, sizeof(dash_banner_t)))) {
+        mark(y0, y1, 0, BANNER_H);
     }
     header_diff(y0, y1);
     if (s_prev->empty != s_frame->empty || s_prev->compact != s_frame->compact) {
@@ -461,7 +542,9 @@ static void draw_status(uint16_t *buf, int sy0, int sh, const frame_t *f) {
 
 static void draw_top(uint16_t *buf, int sy0, int sh, const frame_t *f) {
     if (sy0 >= TOP_H) return;
-    int x = 14 + dash_text(buf, sy0, sh, F_BODY, 14, 7, f->title, DASH_TEXT);
+    uint16_t title_c = f->screen >= DASH_SCREEN_COUNT
+                           ? tone_color(f->u.card.c.tone) : DASH_TEXT;
+    int x = 14 + dash_text(buf, sy0, sh, F_BODY, 14, 7, f->title, title_c);
     if (f->sub[0]) {
         uint16_t c = strcmp(f->sub, "live") == 0 ? DASH_UP : DASH_TEXT2;
         dash_text(buf, sy0, sh, F_SMALL, x + 8, 10, f->sub, c);
@@ -479,16 +562,16 @@ static void draw_top(uint16_t *buf, int sy0, int sh, const frame_t *f) {
 }
 
 // Footer: chevrons hinting at the tap zones, and page dots.
-static void draw_nav(uint16_t *buf, int sy0, int sh, int cur) {
+static void draw_nav(uint16_t *buf, int sy0, int sh, int cur, int total) {
     if (sy0 + sh <= DASH_CONTENT_Y1) return;
     float cy = DASH_CONTENT_Y1 + 10.5f;
     dash_line(buf, sy0, sh, 20, cy - 4, 16, cy, 1.6f, DASH_TEXT3);
     dash_line(buf, sy0, sh, 16, cy, 20, cy + 4, 1.6f, DASH_TEXT3);
     dash_line(buf, sy0, sh, 300, cy - 4, 304, cy, 1.6f, DASH_TEXT3);
     dash_line(buf, sy0, sh, 304, cy, 300, cy + 4, 1.6f, DASH_TEXT3);
-    int w = (DASH_SCREEN_COUNT - 1) * 12 + 18;
+    int w = (total - 1) * 12 + 18;
     int x = (DASH_W - w) / 2;
-    for (int i = 0; i < DASH_SCREEN_COUNT; i++) {
+    for (int i = 0; i < total; i++) {
         if (i == cur) {
             dash_round_rect(buf, sy0, sh, x, (int)cy - 3, x + 18, (int)cy + 3, 3,
                             DASH_ACCENT);
@@ -687,6 +770,168 @@ static void draw_message_screen(uint16_t *buf, int sy0, int sh,
     }
 }
 
+// ---- cards and banners ----------------------------------------------------
+
+static uint16_t tone_color(int tone) {
+    switch (tone) {
+        case DASH_TONE_UP: return DASH_UP;
+        case DASH_TONE_DOWN: return DASH_DOWN;
+        case DASH_TONE_ACCENT: return DASH_ACCENT;
+        case DASH_TONE_BLUE: return DASH_BLUE;
+        case DASH_TONE_DIM: return DASH_TEXT2;
+        default: return DASH_TEXT;
+    }
+}
+
+// Where a card's parts go: wrapped text, then rows, then the button bar.
+typedef struct {
+    int rows_y0, row_pitch, n_rows;
+    bool compact;
+    int btn_y0;
+} card_layout_t;
+
+static void card_layout(const frame_t *f, card_layout_t *l) {
+    const dash_card_t *c = &f->u.card.c;
+    int y = CONTENT_Y + 4;
+    if (f->u.card.n_lines) y += f->u.card.n_lines * 20 + 8;
+    int y1 = DASH_CONTENT_Y1 - 2;
+    l->btn_y0 = y1 - BUTTON_H;
+    if (c->n_buttons) y1 = l->btn_y0 - 6;
+    l->rows_y0 = y;
+    l->n_rows = c->n_rows;
+    l->row_pitch = l->n_rows ? (y1 - y) / l->n_rows : 0;
+    if (l->row_pitch > 40) l->row_pitch = 40;
+    // Too many rows for the room left: drop what doesn't fit.
+    while (l->n_rows && l->row_pitch < 22) {
+        l->n_rows--;
+        l->row_pitch = l->n_rows ? (y1 - y) / l->n_rows : 0;
+    }
+    l->compact = l->row_pitch < 34;
+}
+
+static void button_rect(const frame_t *f, int i, int *x0, int *x1, int *y0,
+                        int *y1) {
+    card_layout_t l;
+    card_layout(f, &l);
+    int n = f->u.card.c.n_buttons;
+    int gap = 8, w = (DASH_W - 2 * MARGIN - (n - 1) * gap) / n;
+    *x0 = MARGIN + i * (w + gap);
+    *x1 = *x0 + w;
+    *y0 = l.btn_y0;
+    *y1 = l.btn_y0 + BUTTON_H;
+}
+
+static void card_spark(uint16_t *buf, int sy0, int sh, const dash_card_row_t *r,
+                       int x0, int y0, int x1, int y1, uint16_t c) {
+    if (r->spark_n < 2) return;
+    float dx = (float)(x1 - x0) / (r->spark_n - 1);
+    for (int k = 1; k < r->spark_n; k++) {
+        dash_line(buf, sy0, sh, x0 + dx * (k - 1),
+                  y1 - r->spark[k - 1] * (y1 - y0) / 255.0f, x0 + dx * k,
+                  y1 - r->spark[k] * (y1 - y0) / 255.0f, 1.5f, c);
+    }
+}
+
+static void draw_card(uint16_t *buf, int sy0, int sh, const frame_t *f) {
+    if (f->empty) {
+        draw_empty(buf, sy0, sh, f);
+        return;
+    }
+    const dash_card_t *c = &f->u.card.c;
+    for (int i = 0; i < f->u.card.n_lines; i++) {
+        dash_text(buf, sy0, sh, F_BODY, MARGIN + 6, CONTENT_Y + 4 + i * 20,
+                  f->u.card.lines[i], DASH_TEXT);
+    }
+    card_layout_t l;
+    card_layout(f, &l);
+    for (int i = 0; i < l.n_rows; i++) {
+        const dash_card_row_t *r = &c->rows[i];
+        int y = l.rows_y0 + i * l.row_pitch, h = l.row_pitch - (l.compact ? 2 : 4);
+        if (y + h <= sy0 || y >= sy0 + sh) continue;
+        uint16_t vc = tone_color(r->tone);
+        uint16_t lc = r->tone == DASH_TONE_DEFAULT ? DASH_UP : vc;  // bar/spark
+        dash_round_rect(buf, sy0, sh, MARGIN, y, DASH_W - MARGIN, y + h,
+                        l.compact ? 6 : RADIUS, DASH_CARD);
+        int bh = dash_font_body.line_h;
+        int ty = l.compact ? y + (h - bh) / 2 : y + (h - 30) / 2 - 2;
+        dash_text(buf, sy0, sh, F_BODY, MARGIN + 10, ty, r->label, DASH_TEXT);
+        if (!l.compact && r->detail[0]) {
+            dash_text(buf, sy0, sh, F_SMALL, MARGIN + 10, ty + 16, r->detail,
+                      DASH_TEXT2);
+        }
+        dash_text_r(buf, sy0, sh, F_BODY, DASH_W - MARGIN - 10, ty, r->value, vc);
+        card_spark(buf, sy0, sh, r, 150, y + 6, 210, y + h - 6, lc);
+        if (r->progress >= 0) {
+            // Under the value, on the right, clear of the label and detail.
+            int bx0 = DASH_W / 2 + 10, bx1 = DASH_W - MARGIN - 10;
+            int by = l.compact ? y + h - 5 : ty + 24;
+            dash_round_rect(buf, sy0, sh, bx0, by, bx1, by + 3, 1, DASH_CARD2);
+            int w = (bx1 - bx0) * r->progress / 100;
+            if (w > 2) dash_round_rect(buf, sy0, sh, bx0, by, bx0 + w, by + 3, 1, lc);
+        }
+    }
+    for (int i = 0; i < c->n_buttons; i++) {
+        int x0, x1, y0, y1;
+        button_rect(f, i, &x0, &x1, &y0, &y1);
+        if (y1 <= sy0 || y0 >= sy0 + sh) continue;
+        bool pressed = c->pressed == i;
+        dash_round_rect(buf, sy0, sh, x0, y0, x1, y1, BUTTON_H / 2,
+                        pressed ? DASH_ACCENT : DASH_CARD2);
+        dash_text_c(buf, sy0, sh, F_BODY, x0, x1,
+                    y0 + (BUTTON_H - dash_font_body.line_h) / 2,
+                    c->buttons[i].label, pressed ? DASH_BG : DASH_TEXT);
+    }
+}
+
+static void draw_banner(uint16_t *buf, int sy0, int sh, const frame_t *f) {
+    if (!f->has_banner || sy0 >= BANNER_H) return;
+    const dash_banner_t *b = &f->banner;
+    uint16_t tc = tone_color(b->tone);
+    dash_fill(buf, sy0, sh, 0, 0, DASH_W, BANNER_H, DASH_BG);
+    dash_round_rect(buf, sy0, sh, 4, 2, DASH_W - 4, BANNER_H - 2, 8,
+                    dash_mix(DASH_CARD2, tc, 45));
+    dash_round_rect(buf, sy0, sh, 10, 8, 13, BANNER_H - 8, 1, tc);
+    // One line: the headline, then as much of the detail as fits.
+    char line[72];
+    int x = 20, x1 = DASH_W - 12;
+    dash_text_fit(F_BODY, line, sizeof(line), b->text, x1 - x);
+    x += dash_text(buf, sy0, sh, F_BODY, x, 6, line, DASH_TEXT) + 8;
+    if (b->detail[0] && x1 - x > 40) {
+        dash_text_fit(F_SMALL, line, sizeof(line), b->detail, x1 - x);
+        dash_text(buf, sy0, sh, F_SMALL, x, 9, line, DASH_TEXT2);
+    }
+}
+
+int dash_screen_hit(int x, int y) {
+    const frame_t *f = s_frame;
+    if (f->has_banner && y < BANNER_H) return DASH_HIT_BANNER;
+    if (f->screen < DASH_SCREEN_COUNT || f->empty) return DASH_HIT_NONE;
+    for (int i = 0; i < f->u.card.c.n_buttons; i++) {
+        int x0, x1, y0, y1;
+        button_rect(f, i, &x0, &x1, &y0, &y1);
+        // A little slack around each button for fingers.
+        if (x >= x0 - 3 && x < x1 + 3 && y >= y0 - 6 && y < y1 + 6) return i;
+    }
+    return DASH_HIT_NONE;
+}
+
+bool dash_screen_card(const char **id, const char **title,
+                      const dash_card_button_t **buttons, int *n) {
+    const frame_t *f = s_frame;
+    if (f->screen < DASH_SCREEN_COUNT || f->empty) return false;
+    *id = f->u.card.c.id;
+    *title = f->u.card.c.title;
+    *buttons = f->u.card.c.buttons;
+    *n = f->u.card.c.n_buttons;
+    return true;
+}
+
+bool dash_screen_banner(dash_banner_t *out) {
+    if (!s_frame->has_banner) return false;
+    *out = s_frame->banner;
+    return true;
+}
+
 static void draw_frame(const frame_t *f, uint16_t *buf, int sy0, int sh) {
     for (int i = 0; i < DASH_W * sh; i++) buf[i] = DASH_BG;
     draw_top(buf, sy0, sh, f);
@@ -699,10 +944,11 @@ static void draw_frame(const frame_t *f, uint16_t *buf, int sy0, int sh) {
             case DASH_SCREEN_STOCKS: draw_stocks(buf, sy0, sh, f); break;
             case DASH_SCREEN_WEATHER: draw_weather(buf, sy0, sh, f); break;
             case DASH_SCREEN_CALENDAR: draw_calendar(buf, sy0, sh, f); break;
-            default: break;
+            default: draw_card(buf, sy0, sh, f); break;
         }
     }
-    draw_nav(buf, sy0, sh, f->screen);
+    draw_nav(buf, sy0, sh, f->screen, f->total);
+    draw_banner(buf, sy0, sh, f);
 }
 
 void dash_screen_draw_strip(uint16_t *buf, int sy0, int sh) {
