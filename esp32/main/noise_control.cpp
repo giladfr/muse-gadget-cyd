@@ -100,7 +100,12 @@ static char s_noise_host[256] = NOISE_DEFAULT_HOST;
 // regular inbound scratch; like other boards without PSRAM it keeps the
 // outbound request backlog small.
 #define NOISE_REQUESTS (CONFIG_MUSE_ENABLED || CONFIG_HOMEHUB_DASHBOARD_MUSE_CHAT)
+#ifdef CONFIG_SPIRAM
 #define REQ_LEAN (SMALL_CONTROL_SESSION || !CONFIG_SPIRAM)
+#else
+// No PSRAM: CONFIG_SPIRAM is undefined, and the backlog stays small.
+#define REQ_LEAN 1
+#endif
 
 // Max inbound service frame scratch. Daemon control responses are modest JSON,
 // but the tunnel stream (multiplexed on this session) carries ~8 KB IP-packet
