@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
+#include "nvs.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "dash.touch";
@@ -30,8 +31,8 @@ static const char *TAG = "dash.touch";
 #define CMD_Z2    0xC1
 #define CMD_SLEEP 0x90
 
-// Raw 12-bit range of the 2432S028R panel (community calibration for the
-// landscape orientation the status screen uses).
+// Default raw 12-bit range of the 2432S028R panel (community calibration
+// for the landscape orientation the status screen uses).
 #define RAW_X_MIN 200
 #define RAW_X_MAX 3700
 #define RAW_Y_MIN 240
@@ -42,6 +43,12 @@ static const char *TAG = "dash.touch";
 #define SWIPE_MIN_DX 40
 #define TAP_MAX_MS 400
 #define TAP_MAX_MOVE 12
+#define LONG_MAX_MOVE 30
+
+#define NVS_NS "dash"
+#define NVS_KEY "tcal"
+#define CAL_VERSION 1
+
 // Consecutive pen-up samples before a touch counts as released, so one bad
 // sample mid-swipe doesn't split the gesture.
 #define RELEASE_SAMPLES 2
@@ -50,8 +57,17 @@ static bool s_ok = false;
 static bool s_irq_ok = false;
 static TaskHandle_t s_notify;
 
+static dash_touch_cal_t s_cal;
+
+typedef struct {
+    uint8_t version;
+    dash_touch_cal_t cal;
+} cal_blob_t;
+
 // Gesture state (dashboard task only).
 static bool s_down = false;
+static bool s_long_fired = false;
+static int s_down_rx, s_down_ry;
 static int s_up_count = 0;
 static int s_down_x, s_down_y;
 static int64_t s_down_ms;
@@ -129,26 +145,110 @@ static bool tp_sample(int *sx, int *sy) {
     s_raw_x = (uint16_t)rx;
     s_raw_y = (uint16_t)ry;
 
-    int px = map_axis(rx, RAW_X_MIN, RAW_X_MAX, 320);
-    int py = map_axis(ry, RAW_Y_MIN, RAW_Y_MAX, 240);
-#if CONFIG_HOMEHUB_DASHBOARD_TOUCH_SWAP_XY
-    // Swapped panels: scale each raw axis onto the other screen axis.
-    px = map_axis(ry, RAW_Y_MIN, RAW_Y_MAX, 320);
-    py = map_axis(rx, RAW_X_MIN, RAW_X_MAX, 240);
-#endif
-#if CONFIG_HOMEHUB_DASHBOARD_TOUCH_INVERT_X
-    px = 319 - px;
-#endif
-#if CONFIG_HOMEHUB_DASHBOARD_TOUCH_INVERT_Y
-    py = 239 - py;
-#endif
-    *sx = px;
-    *sy = py;
+    int raw[2] = {rx, ry};
+    *sx = map_axis(raw[s_cal.src_x & 1], s_cal.x_lo, s_cal.x_hi, 320);
+    *sy = map_axis(raw[s_cal.src_y & 1], s_cal.y_lo, s_cal.y_hi, 240);
     return true;
 }
 
+static void default_cal(dash_touch_cal_t *c) {
+    c->src_x = 0;
+    c->src_y = 1;
+    c->x_lo = RAW_X_MIN;
+    c->x_hi = RAW_X_MAX;
+    c->y_lo = RAW_Y_MIN;
+    c->y_hi = RAW_Y_MAX;
+#if CONFIG_HOMEHUB_DASHBOARD_TOUCH_SWAP_XY
+    // Swapped panels: each raw axis drives the other screen axis.
+    c->src_x = 1;
+    c->src_y = 0;
+    c->x_lo = RAW_Y_MIN;
+    c->x_hi = RAW_Y_MAX;
+    c->y_lo = RAW_X_MIN;
+    c->y_hi = RAW_X_MAX;
+#endif
+#if CONFIG_HOMEHUB_DASHBOARD_TOUCH_INVERT_X
+    int16_t t = c->x_lo; c->x_lo = c->x_hi; c->x_hi = t;
+#endif
+#if CONFIG_HOMEHUB_DASHBOARD_TOUCH_INVERT_Y
+    int16_t u = c->y_lo; c->y_lo = c->y_hi; c->y_hi = u;
+#endif
+}
+
+static bool cal_sane(const dash_touch_cal_t *c) {
+    return c->src_x <= 1 && c->src_y <= 1 && c->src_x != c->src_y
+        && abs(c->x_hi - c->x_lo) >= 500 && abs(c->y_hi - c->y_lo) >= 500;
+}
+
+static void load_cal(void) {
+    default_cal(&s_cal);
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+    cal_blob_t blob;
+    size_t len = sizeof(blob);
+    if (nvs_get_blob(h, NVS_KEY, &blob, &len) == ESP_OK && len == sizeof(blob)
+        && blob.version == CAL_VERSION && cal_sane(&blob.cal)) {
+        s_cal = blob.cal;
+        ESP_LOGI(TAG, "touch calibration loaded from NVS");
+    }
+    nvs_close(h);
+}
+
+void dash_touch_get_cal(dash_touch_cal_t *out) {
+    *out = s_cal;
+}
+
+void dash_touch_set_cal(const dash_touch_cal_t *cal) {
+    nvs_handle_t h;
+    bool nvs = nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK;
+    if (cal && cal_sane(cal)) {
+        s_cal = *cal;
+        if (nvs) {
+            cal_blob_t blob = {.version = CAL_VERSION, .cal = *cal};
+            nvs_set_blob(h, NVS_KEY, &blob, sizeof(blob));
+        }
+    } else {
+        default_cal(&s_cal);
+        if (nvs) nvs_erase_key(h, NVS_KEY);
+    }
+    if (nvs) {
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    ESP_LOGI(TAG, "touch map: X from raw %c %d..%d, Y from raw %c %d..%d",
+             s_cal.src_x ? 'y' : 'x', s_cal.x_lo, s_cal.x_hi,
+             s_cal.src_y ? 'y' : 'x', s_cal.y_lo, s_cal.y_hi);
+}
+
+bool dash_touch_cal_compute(const int t[3][2], const int r[3][2],
+                            dash_touch_cal_t *out) {
+    // t[0] -> t[1] moves only along screen X; t[0] -> t[2] only along Y.
+    // The raw axis that changed most is the one that drives that screen axis.
+    int dxa = abs(r[1][0] - r[0][0]), dxb = abs(r[1][1] - r[0][1]);
+    int dya = abs(r[2][0] - r[0][0]), dyb = abs(r[2][1] - r[0][1]);
+    int sx = dxa >= dxb ? 0 : 1;
+    int sy = dya >= dyb ? 0 : 1;
+    int span_x = t[1][0] - t[0][0], span_y = t[2][1] - t[0][1];
+    if (sx == sy || span_x <= 0 || span_y <= 0) return false;
+    float kx = (float)(r[1][sx] - r[0][sx]) / (float)span_x;  // raw per px
+    float ky = (float)(r[2][sy] - r[0][sy]) / (float)span_y;
+    dash_touch_cal_t c = {
+        .src_x = (uint8_t)sx,
+        .src_y = (uint8_t)sy,
+        .x_lo = (int16_t)(r[0][sx] - kx * t[0][0]),
+        .x_hi = (int16_t)(r[0][sx] + kx * (320 - t[0][0])),
+        .y_lo = (int16_t)(r[0][sy] - ky * t[0][1]),
+        .y_hi = (int16_t)(r[0][sy] + ky * (240 - t[0][1])),
+    };
+    if (!cal_sane(&c)) return false;
+    *out = c;
+    return true;
+}
+
+
 bool dash_touch_init(TaskHandle_t notify) {
     s_notify = notify;
+    load_cal();
     gpio_config_t out = {
         .pin_bit_mask = (1ULL << PIN_CLK) | (1ULL << PIN_MOSI) | (1ULL << PIN_CS),
         .mode = GPIO_MODE_OUTPUT,
@@ -215,6 +315,8 @@ static dash_touch_t gesture_end(int64_t now) {
         ev.type = DASH_TOUCH_TAP;
         ev.x = s_down_x;
         ev.y = s_down_y;
+        ev.raw_x = s_down_rx;
+        ev.raw_y = s_down_ry;
     }
     return ev;
 }
@@ -233,19 +335,29 @@ dash_touch_t dash_touch_poll(void) {
             // its own while a touch is tracked.
             if (s_irq_ok) gpio_intr_disable(PIN_IRQ);
             s_down = true;
+            s_long_fired = false;
             s_down_x = s_last_x = x;
             s_down_y = s_last_y = y;
+            s_down_rx = s_raw_x;
+            s_down_ry = s_raw_y;
             s_down_ms = now;
         } else {
             s_last_x = x;
             s_last_y = y;
+            if (!s_long_fired && now - s_down_ms >= DASH_TOUCH_LONG_MS
+                && abs(x - s_down_x) < LONG_MAX_MOVE
+                && abs(y - s_down_y) < LONG_MAX_MOVE) {
+                s_long_fired = true;
+                ev.type = DASH_TOUCH_LONG;
+            }
         }
         return ev;
     }
     if (s_down && ++s_up_count >= RELEASE_SAMPLES) {
         s_down = false;
         s_up_count = 0;
-        ev = gesture_end(now);
+        // A long press already acted; its release is not also a tap/swipe.
+        if (!s_long_fired) ev = gesture_end(now);
     }
     if (!s_down && s_irq_ok) {
         // Idle: (re-)arm the pen-down interrupt.

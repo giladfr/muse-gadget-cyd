@@ -1,0 +1,12 @@
+# Copy to devices/sdkconfig.local (git-ignored) for settings that must not be
+# committed. tools/board.sh loads it last, after the board file.
+#
+# Required for any image you install over the air: without the token the new
+# firmware cannot reconnect to Muse, and the board rolls back after 5 minutes.
+CONFIG_GADGET_SDK_TOKEN="mgst_..."
+#
+# Optional:
+# CONFIG_HOMEHUB_DASHBOARD_TZ="CST6CDT,M3.2.0,M11.1.0"
+# CONFIG_HOMEHUB_DASHBOARD_BRIDGE_URL="http://192.168.1.100:8080/dash.json"
+# CONFIG_HOMEHUB_DASHBOARD_BL_NIGHT_START=23
+# CONFIG_HOMEHUB_DASHBOARD_BL_NIGHT_END=7

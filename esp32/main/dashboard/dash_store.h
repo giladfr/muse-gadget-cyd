@@ -17,6 +17,8 @@ extern "C" {
 #define DASH_MAX_STOCKS  8
 #define DASH_MAX_EVENTS  8
 #define DASH_MAX_FORECAST 4
+// Prices kept per symbol for the sparkline (one per update the board gets).
+#define DASH_HISTORY 32
 
 typedef struct {
     char symbol[16];
@@ -24,6 +26,10 @@ typedef struct {
     double change;
     double change_pct;
     char market[16];   // "Open" / "Closed" / ...
+    float history[DASH_HISTORY];  // oldest first; the last is `price`
+    uint8_t history_n;
+    int8_t moved;      // +1 / -1: price went up / down in the last update
+    int64_t moved_us;  // when (esp_timer_get_time()), 0 = never
 } dash_stock_t;
 
 typedef struct {
@@ -36,7 +42,9 @@ typedef struct {
 typedef struct {
     int temp;
     int feels;
+    int code;          // Open-Meteo weather code, -1 if unknown
     char desc[24];
+    char location[24]; // "Austin, TX"
     int humidity;
     int wind;          // mph
     dash_forecast_t forecast[DASH_MAX_FORECAST];
@@ -55,7 +63,11 @@ typedef struct {
     bool weather_valid;
     dash_event_t events[DASH_MAX_EVENTS];
     int n_events;
+    int n_events_total;     // events in the push, including ones not kept
     char events_label[32];  // e.g. "Tuesday, Oct 6"
+    // Local date of the calendar push as year * 1000 + day of year, or -1 if
+    // the clock was not set: events count as "today's" only on that date.
+    int events_day;
     // Quote freshness: how old the quotes already were when they arrived
     // (bridge `now` - `stocks_updated`), and when they arrived
     // (esp_timer_get_time()). stocks_rx_us == 0 means no quotes yet.

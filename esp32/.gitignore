@@ -17,6 +17,8 @@ build/
 build-*/
 sdkconfig
 sdkconfig.old
+# Personal build settings (SDK token etc.), see devices/sdkconfig.local.example.
+devices/sdkconfig.local
 managed_components/
 dependencies.lock
 .cache/
@@ -52,3 +54,6 @@ __pycache__/
 .gradle/
 .idea/
 local.properties
+
+# tools/cyd_release.sh output.
+/release/

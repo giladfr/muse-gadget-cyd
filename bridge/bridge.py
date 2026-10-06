@@ -17,6 +17,7 @@ Config via env:
     PORT        listen port (default: 8080)
     LAT, LON    weather coordinates (default: 30.2672, -97.7431 = Austin TX)
     TZ          weather timezone (default: America/Chicago)
+    LOCATION    place name shown on the weather screen (default: Austin, TX)
 
 Resilience: a failed upstream fetch never crashes the service and never
 wipes the cache -- the last good data keeps being served. Each feed has its
@@ -41,6 +42,7 @@ PORT = int(os.environ.get("PORT", "8080"))
 LAT = os.environ.get("LAT", "30.2672")
 LON = os.environ.get("LON", "-97.7431")
 TZ = os.environ.get("TZ", "America/Chicago")
+LOCATION = os.environ.get("LOCATION", "Austin, TX")
 
 STOCK_POLL_S = 30
 # When every quote says the market is closed, prices don't move: poll slowly.
@@ -173,6 +175,7 @@ def _fetch_weather():
         })
     code = cur.get("weather_code")
     return {
+        "location": LOCATION,
         "temp": int(round(cur.get("temperature_2m", 0))),
         "feels": int(round(cur.get("apparent_temperature",
                                    cur.get("temperature_2m", 0)))),

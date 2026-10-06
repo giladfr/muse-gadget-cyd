@@ -22,12 +22,24 @@ typedef enum {
     DASH_TOUCH_TAP,        // quick touch; x/y valid
     DASH_TOUCH_SWIPE_LEFT,
     DASH_TOUCH_SWIPE_RIGHT,
+    DASH_TOUCH_LONG,       // held still for DASH_TOUCH_LONG_MS (fires once)
 } dash_touch_event_t;
+
+#define DASH_TOUCH_LONG_MS 5000
 
 typedef struct {
     dash_touch_event_t type;
-    int x, y;  // screen coords for TAP
+    int x, y;          // screen coords for TAP
+    int raw_x, raw_y;  // filtered raw readings at the touch-down point
 } dash_touch_t;
+
+// Raw-to-screen mapping: screen X comes from raw axis src_x (0 = X
+// channel, 1 = Y channel), scaled so raw x_lo is screen 0 and raw x_hi is
+// screen DASH_W (x_hi < x_lo inverts). Same for Y.
+typedef struct {
+    uint8_t src_x, src_y;
+    int16_t x_lo, x_hi, y_lo, y_hi;
+} dash_touch_cal_t;
 
 // Init the touch controller. A pen-down interrupt sends `notify` a task
 // notification (xTaskNotifyGive) so the dashboard task can sleep between
@@ -46,6 +58,18 @@ bool dash_touch_irq_driven(void);
 // A touch is in progress (or just ended): poll quickly.
 bool dash_touch_tracking(void);
 #define DASH_TOUCH_FAST_MS 10
+
+// Current mapping (NVS calibration, else the Kconfig defaults).
+void dash_touch_get_cal(dash_touch_cal_t *out);
+
+// Build a mapping from three taps on screen targets t[0..2] (t[1] to the
+// right of t[0], t[2] below it) with raw readings r[0..2]. Returns false if
+// the points don't make sense (same axis, too close).
+bool dash_touch_cal_compute(const int t[3][2], const int r[3][2],
+                            dash_touch_cal_t *out);
+
+// Use and save a mapping; NULL forgets the saved one (Kconfig defaults).
+void dash_touch_set_cal(const dash_touch_cal_t *cal);
 
 // One-line diagnostics for remote debugging: init state, IRQ level, last raw
 // readings. Safe to call from any task (it does not touch the controller).

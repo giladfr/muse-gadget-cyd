@@ -1,12 +1,15 @@
 /*
- * Dashboard drawing primitives: RGB565 strip rendering with the SDK's
- * 5x8 pixel font. Screens render in horizontal strips to stay within the
- * no-PSRAM RAM budget.
+ * Dashboard drawing primitives: RGB565 strip rendering with anti-aliased
+ * text (Inter, see dash_assets.h), rounded rectangles and lines. Screens
+ * render in horizontal strips to stay within the no-PSRAM RAM budget; every
+ * primitive clips to the strip it is given (screen rows [sy0, sy0 + sh)).
  */
 #pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "dash_assets.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,44 +32,57 @@ extern "C" {
                 | ((DASH_RGB565_(r, g, b) & 0xff) << 8)))
 
 // Palette (panel byte order).
-#define DASH_BG     DASH_RGB(10, 18, 32)     // dark navy
-#define DASH_CARD   DASH_RGB(22, 34, 56)     // card
-#define DASH_TOPBAR DASH_RGB(16, 28, 48)
-#define DASH_RULE   DASH_RGB(40, 55, 80)     // separator lines
-#define DASH_DOT    DASH_RGB(60, 70, 95)     // inactive nav dot
-#define DASH_ACCENT DASH_RGB(255, 178, 0)    // amber
-#define DASH_WHITE  DASH_RGB(235, 240, 248)  // off-white
-#define DASH_DIM    DASH_RGB(140, 155, 180)  // dim blue-grey
-#define DASH_GREEN  DASH_RGB(40, 210, 90)
-#define DASH_RED    DASH_RGB(240, 60, 60)
+#define DASH_BG     DASH_RGB(10, 15, 26)     // near-black navy
+#define DASH_CARD   DASH_RGB(21, 29, 45)
+#define DASH_CARD2  DASH_RGB(30, 41, 62)     // raised / pressed
+#define DASH_TEXT   DASH_RGB(234, 240, 250)
+#define DASH_TEXT2  DASH_RGB(140, 154, 179)  // secondary
+#define DASH_TEXT3  DASH_RGB(86, 98, 122)    // faint
+#define DASH_ACCENT DASH_RGB(255, 176, 32)   // amber
+#define DASH_BLUE   DASH_RGB(90, 160, 255)
+#define DASH_UP     DASH_RGB(52, 211, 153)
+#define DASH_DOWN   DASH_RGB(248, 113, 113)
 #define DASH_BLACK  DASH_RGB(0, 0, 0)
+#define DASH_WHITE  DASH_RGB(255, 255, 255)
 
 static inline uint16_t dash_rgb(uint8_t r, uint8_t g, uint8_t b) {
     return DASH_RGB(r, g, b);
 }
 
-// Fill [x0,x1) of the strip (strip covers screen rows [sy0, sy0+sh)) with c,
-// for screen rows [y0, y1) clipped to the strip.
+// Mix two palette colours: alpha 0 = a, 255 = b.
+uint16_t dash_mix(uint16_t a, uint16_t b, int alpha);
+
+// Fill [x0,x1) x [y0,y1) with c, clipped to the strip.
 void dash_fill(uint16_t *buf, int sy0, int sh,
                int x0, int y0, int x1, int y1, uint16_t c);
 
-// Draw text at (x, y) clipped to the strip. bg is used unless transparent.
-void dash_text(uint16_t *buf, int sy0, int sh,
-               int x, int y, const char *s, int scale,
-               uint16_t fg, uint16_t bg, bool transparent);
+// Filled rectangle with anti-aliased rounded corners of radius r.
+void dash_round_rect(uint16_t *buf, int sy0, int sh,
+                     int x0, int y0, int x1, int y1, int r, uint16_t c);
 
-// Pixel width of s at scale (5px glyph + 1px spacing).
-int dash_text_w(const char *s, int scale);
+// Anti-aliased filled circle and line (width ~ w px).
+void dash_circle(uint16_t *buf, int sy0, int sh, float cx, float cy, float r,
+                 uint16_t c);
+void dash_line(uint16_t *buf, int sy0, int sh, float x0, float y0, float x1,
+               float y1, float w, uint16_t c);
 
-// Draw text right-aligned ending at x1.
-void dash_text_r(uint16_t *buf, int sy0, int sh,
-                 int x1, int y, const char *s, int scale,
-                 uint16_t fg, uint16_t bg, bool transparent);
+// Text with its line top at y. Returns the pen advance (width).
+int dash_text(uint16_t *buf, int sy0, int sh, const dash_font_t *f,
+              int x, int y, const char *s, uint16_t c);
+int dash_text_w(const dash_font_t *f, const char *s);
+// Right-aligned ending at x1; centred in [x0, x1).
+void dash_text_r(uint16_t *buf, int sy0, int sh, const dash_font_t *f,
+                 int x1, int y, const char *s, uint16_t c);
+void dash_text_c(uint16_t *buf, int sy0, int sh, const dash_font_t *f,
+                 int x0, int x1, int y, const char *s, uint16_t c);
 
-// Draw text centred in [xc0, xc1).
-void dash_text_c(uint16_t *buf, int sy0, int sh,
-                 int xc0, int xc1, int y, const char *s, int scale,
-                 uint16_t fg, uint16_t bg, bool transparent);
+// Copy src into dst (size n), cut with "..." to fit max_w pixels.
+void dash_text_fit(const dash_font_t *f, char *dst, int n, const char *src,
+                   int max_w);
+
+// Blit a 4-bit alpha bitmap (w x h, packed as in dash_assets) in colour c.
+void dash_alpha(uint16_t *buf, int sy0, int sh, int x, int y, int w, int h,
+                const uint8_t *bits, uint16_t c);
 
 #ifdef __cplusplus
 }

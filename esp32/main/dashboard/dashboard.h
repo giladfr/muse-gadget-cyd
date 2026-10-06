@@ -27,6 +27,21 @@ void dashboard_init(void);
 // first successful connection and stays up afterwards.
 void dashboard_set_paired(bool paired);
 
+// Link (control session) up or down, for the header's status dot.
+void dashboard_set_link(bool up);
+
+// True once the dashboard has drawn and kept running for a while (or never
+// started). The OTA verifier waits for it before accepting a new image, so a
+// firmware that crashes in the dashboard rolls back instead of looping.
+bool dashboard_healthy(void);
+
+// Start the on-screen touch calibration, or with `reset` forget the saved one.
+void dashboard_calibrate(bool reset);
+
+// Firmware update progress (0..100) for the on-screen progress bar; -1 when
+// the update failed (back to the dashboard).
+void dashboard_ota_progress(int pct);
+
 // An image is about to be drawn full-screen (display.draw_url,
 // dashboard.takeover, display.draw_sd). Stops dashboard rendering and waits
 // for an in-progress frame to stop, so the image is not drawn over. Follow
@@ -51,8 +66,8 @@ bool dashboard_data_set_json(const char *screen, const char *json);
 // Called by the bridge poller when fresh data is in the store.
 void dashboard_data_updated(void);
 
-// One-line touch diagnostics for remote debugging.
-void dashboard_debug_touch(char *buf, size_t n);
+// One-line diagnostics for remote debugging: touch, backlight, state, heap.
+void dashboard_debug(char *buf, size_t n);
 
 #ifdef __cplusplus
 }

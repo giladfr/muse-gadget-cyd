@@ -47,3 +47,16 @@ bool ota_is_enabled(void);
 // immediately. `cb` may be NULL. When disabled, synchronously reports SKIPPED
 // without starting a download or task; force cannot override this setting.
 void ota_start(const char *url, bool force, ota_status_cb cb, void *user);
+
+// Download progress, for an on-screen bar: 0..100 while an accepted image
+// downloads, -1 if the update then fails. Called on the OTA task. NULL to
+// clear. Available whether or not OTA is enabled.
+typedef void (*ota_progress_cb)(int pct);
+void ota_set_progress_cb(ota_progress_cb cb);
+
+// Crash-loop guard. Call ota_crash_guard_boot() first thing at boot: after
+// three crash resets in a row (panic or watchdog) it boots the other OTA slot,
+// if that holds a valid image, so a bad update can't loop forever in a sealed
+// case. Call ota_crash_guard_ok() once the firmware has proven itself.
+void ota_crash_guard_boot(void);
+void ota_crash_guard_ok(void);

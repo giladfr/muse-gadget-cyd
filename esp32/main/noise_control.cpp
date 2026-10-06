@@ -1387,10 +1387,42 @@ static char *build_register_json(void) {
                         "X button to dismiss it and return to the dashboard.",
                         take_required, nullptr);
             add_command(commands, "dashboard.debug",
-                        "Return one-line touch diagnostics (init state, IRQ "
-                        "level, raw ADC readings).",
+                        "Return one-line diagnostics: touch (raw readings, "
+                        "pressure), backlight (light sensor, level), state and "
+                        "free heap.",
                         nullptr, nullptr);
+            cJSON *cal_optional = cJSON_CreateObject();
+            cJSON *reset_param = cJSON_CreateObject();
+            cJSON_AddStringToObject(reset_param, "type", "boolean");
+            cJSON_AddStringToObject(reset_param, "description",
+                                    "Forget the saved calibration instead.");
+            cJSON_AddItemToObject(cal_optional, "reset", reset_param);
+            add_command(commands, "dashboard.calibrate",
+                        "Show the touch calibration screen (tap three targets; "
+                        "saved on the device). Holding a finger on the screen "
+                        "for 5 seconds does the same.",
+                        nullptr, cal_optional);
 #ifdef CONFIG_HOMEHUB_SDCARD
+            {
+                cJSON *fetch_required = cJSON_CreateObject();
+                cJSON_AddItemToObject(fetch_required, "url",
+                                      string_param("File URL. Plain http:// "
+                                                   "recommended (no PSRAM for "
+                                                   "TLS)."));
+                cJSON_AddItemToObject(fetch_required, "path",
+                                      string_param("Destination on the SD card, "
+                                                   "e.g. images/cat.jpg."));
+                cJSON *fetch_optional = cJSON_CreateObject();
+                cJSON_AddItemToObject(fetch_optional, "sha256",
+                                      string_param("Expected SHA-256 (hex); the "
+                                                   "file is kept only if it "
+                                                   "matches."));
+                add_command(commands, "sd.fetch",
+                            "Download a file (any type, up to 8 MB) onto the SD "
+                            "card. Replaces the file only once the download is "
+                            "complete and verified.",
+                            fetch_required, fetch_optional);
+            }
             add_command(commands, "sd.info",
                         "Show SD card size and type.",
                         nullptr, nullptr);
@@ -1452,8 +1484,17 @@ static char *build_register_json(void) {
 
     if (ota_is_enabled()) {
         cJSON *ota_required = cJSON_CreateObject();
+#if CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
+        // Boards without PSRAM take plain HTTP too: the image's signature is
+        // what makes it trusted, and TLS would not fit next to the session.
+        cJSON_AddItemToObject(ota_required, "url",
+                              string_param("HTTP or HTTPS URL of the signed .bin "
+                                           "firmware image to flash (plain HTTP "
+                                           "recommended on this board)."));
+#else
         cJSON_AddItemToObject(ota_required, "url",
                               string_param("HTTPS URL of the .bin firmware image to flash."));
+#endif
         cJSON *ota_optional = cJSON_CreateObject();
         cJSON *force_param = cJSON_CreateObject();
         cJSON_AddStringToObject(force_param, "type", "boolean");

@@ -35,7 +35,7 @@ WATCHLIST=AMD,NVDA,TSLA docker compose up -d
      "market": "Closed"}
   ],
   "weather": {
-    "temp": 78, "feels": 80, "desc": "Partly cloudy", "code": 2,
+    "location": "Austin, TX", "temp": 78, "feels": 80, "desc": "Partly cloudy", "code": 2,
     "humidity": 55, "wind": 8,
     "forecast": [
       {"day": "Today", "high": 85, "low": 66, "code": 2},
@@ -88,5 +88,6 @@ quotes under 90 s old, then `Nm ago` / `Nh ago`.
 | `PORT`      | `8080`                       | Listen port                    |
 | `LAT`/`LON` | `30.2672` / `-97.7431`       | Weather coordinates (Austin)   |
 | `TZ`        | `America/Chicago`            | Weather timezone               |
+| `LOCATION`  | `Austin, TX`                 | Place name on the weather screen |
 
 Stdlib only — no pip dependencies. Logs are quiet by design.

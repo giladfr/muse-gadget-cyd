@@ -310,8 +310,9 @@ menu "ESP32 Device SDK"
         depends on HOMEHUB_DASHBOARD
         default n
         help
-            Flip these if taps land in the wrong place; check the raw
-            readings with the dashboard.debug command.
+            Defaults for the touch mapping. A calibration (hold a finger on
+            the screen for 5 s, or the dashboard.calibrate command) is saved
+            to NVS and replaces them; dashboard.debug shows raw readings.
 
     config HOMEHUB_DASHBOARD_TOUCH_INVERT_X
         bool "Touch: invert X"
@@ -322,6 +323,90 @@ menu "ESP32 Device SDK"
         bool "Touch: invert Y"
         depends on HOMEHUB_DASHBOARD
         default n
+
+    config HOMEHUB_DASHBOARD_TZ
+        string "Dashboard time zone (POSIX TZ string)"
+        depends on HOMEHUB_DASHBOARD
+        default "CST6CDT,M3.2.0,M11.1.0"
+        help
+            Local time for the header clock, the night backlight schedule
+            and the calendar's past/next highlighting. America/Chicago by
+            default; e.g. "EST5EDT,M3.2.0,M11.1.0", "PST8PDT,M3.2.0,M11.1.0",
+            "IST-2IDT,M3.4.4/26,M10.5.0".
+
+    config HOMEHUB_DASHBOARD_NTP_SERVER
+        string "SNTP server"
+        depends on HOMEHUB_DASHBOARD
+        default "pool.ntp.org"
+        help
+            The clock also falls back to the bridge's "now" field until SNTP
+            answers.
+
+    config HOMEHUB_DASHBOARD_CLOCK_24H
+        bool "24-hour clock"
+        depends on HOMEHUB_DASHBOARD
+        default n
+
+    config HOMEHUB_DASHBOARD_TAKEOVER_TIMEOUT_MIN
+        int "Return from a pushed image after N minutes (0 = never)"
+        depends on HOMEHUB_DASHBOARD
+        default 10
+
+    config HOMEHUB_DASHBOARD_BL_AUTO
+        bool "Backlight: follow ambient light (LDR on GPIO 34)"
+        depends on HOMEHUB_DASHBOARD
+        default y
+        help
+            The 2432S028R has a light sensor on GPIO 34. Its raw reading is
+            low in bright light and rises in the dark; dashboard.debug shows
+            it, to tune the two thresholds below.
+
+    config HOMEHUB_DASHBOARD_BL_LDR_BRIGHT
+        int "Backlight: LDR reading at (or below) which the room is bright"
+        depends on HOMEHUB_DASHBOARD_BL_AUTO
+        default 50
+
+    config HOMEHUB_DASHBOARD_BL_LDR_DARK
+        int "Backlight: LDR reading at (or above) which the room is dark"
+        depends on HOMEHUB_DASHBOARD_BL_AUTO
+        default 600
+
+    config HOMEHUB_DASHBOARD_BL_DARK_PCT
+        int "Backlight: brightness in a dark room (percent)"
+        depends on HOMEHUB_DASHBOARD_BL_AUTO
+        range 1 100
+        default 25
+
+    config HOMEHUB_DASHBOARD_BL_NIGHT_START
+        int "Backlight: night starts at this hour (0-23)"
+        depends on HOMEHUB_DASHBOARD
+        range 0 23
+        default 23
+        help
+            Set start and end to the same hour to turn the schedule off.
+
+    config HOMEHUB_DASHBOARD_BL_NIGHT_END
+        int "Backlight: night ends at this hour (0-23)"
+        depends on HOMEHUB_DASHBOARD
+        range 0 23
+        default 7
+
+    config HOMEHUB_DASHBOARD_BL_NIGHT_PCT
+        int "Backlight: night brightness (percent)"
+        depends on HOMEHUB_DASHBOARD
+        range 0 100
+        default 5
+
+    config HOMEHUB_DASHBOARD_BL_IDLE_MIN
+        int "Backlight: dim after N minutes without a touch (0 = never)"
+        depends on HOMEHUB_DASHBOARD
+        default 0
+
+    config HOMEHUB_DASHBOARD_BL_IDLE_PCT
+        int "Backlight: idle brightness (percent)"
+        depends on HOMEHUB_DASHBOARD
+        range 0 100
+        default 30
 
     config HOMEHUB_DASHBOARD_BRIDGE_POLL
         bool "Poll the bridge URL from the device"

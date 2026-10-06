@@ -47,6 +47,10 @@ set(DASHBOARD_SRCS
     "dashboard/dash_store.c"
     "dashboard/dash_touch.c"
     "dashboard/dash_net.c"
+    "dashboard/dash_clock.c"
+    "dashboard/dash_backlight.c"
+    "dashboard/dash_icons.c"
+    "dashboard/dash_assets.c"
 )
 
 set(GADGET_REQUIRES
@@ -83,6 +87,8 @@ set(GADGET_REQUIRES
     sdmmc
     esp_driver_sdspi
     esp_driver_sdmmc
+    # The dashboard's ambient light sensor (unconditional, as above).
+    esp_adc
 )
 
 # E-paper has its own status screen in place of led_status.c.
@@ -127,7 +133,7 @@ if(CONFIG_HOMEHUB_DASHBOARD)
 endif()
 
 if(CONFIG_HOMEHUB_SDCARD)
-    list(APPEND GADGET_SRCS "sd_card.c" "sd_jpeg.c")
+    list(APPEND GADGET_SRCS "sd_card.c" "sd_jpeg.c" "sd_fetch.c")
 endif()
 
 idf_component_register(

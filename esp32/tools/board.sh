@@ -142,6 +142,11 @@ fi
 
 BUILD_DIR="$PROJECT/build-$BOARD"
 cd "$PROJECT"
+# Personal, never-committed settings (the SDK token, a bridge URL, a time
+# zone) go in devices/sdkconfig.local, loaded last.
+if [ -f devices/sdkconfig.local ]; then
+  DEFAULTS="$DEFAULTS;devices/sdkconfig.local"
+fi
 exec idf.py -B "$BUILD_DIR" \
   -DIDF_TARGET="$TARGET" \
   -DSDKCONFIG="$BUILD_DIR/sdkconfig" \

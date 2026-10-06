@@ -60,6 +60,9 @@
 #if CONFIG_HOMEHUB_DASHBOARD
 #include "dashboard/dashboard.h"
 #endif
+#ifdef CONFIG_HOMEHUB_SDCARD
+#include "sd_fetch.h"
+#endif
 #include "button.h"
 #include "tunnel_netif.h"
 #include "net_discovery.h"
@@ -1564,6 +1567,23 @@ static void draw_url_done(const image_fetch_result_t *r, void *user) {
 #endif
     free(ctx);
 }
+
+#ifdef CONFIG_HOMEHUB_SDCARD
+static void sd_fetch_done(const char *err, size_t bytes, void *user) {
+    draw_url_ctx_t *ctx = user;
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", err == NULL);
+    if (err) {
+        cJSON *error = cJSON_AddObjectToObject(result, "error");
+        cJSON_AddStringToObject(error, "code", "sd_fetch_failed");
+        cJSON_AddStringToObject(error, "message", err);
+    } else {
+        cJSON_AddNumberToObject(result, "bytes", (double)bytes);
+    }
+    noise_ctrl_send_command_result(ctx->session_generation, ctx->request_id, result);
+    free(ctx);
+}
+#endif
 #endif
 
 #if CONFIG_MUSE_WATCHER_CAMERA
@@ -1941,11 +1961,18 @@ static cJSON *on_ws_command(
         return async;
     }
     if (strcmp(command, "dashboard.debug") == 0) {
-        char dbg[128];
-        dashboard_debug_touch(dbg, sizeof(dbg));
+        char dbg[256];
+        dashboard_debug(dbg, sizeof(dbg));
         cJSON *result = cJSON_CreateObject();
         cJSON_AddBoolToObject(result, "ok", true);
-        cJSON_AddStringToObject(result, "touch", dbg);
+        cJSON_AddStringToObject(result, "debug", dbg);
+        return result;
+    }
+    if (strcmp(command, "dashboard.calibrate") == 0) {
+        cJSON *reset = cJSON_GetObjectItem(params, "reset");
+        dashboard_calibrate(cJSON_IsTrue(reset));
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
         return result;
     }
 #endif
@@ -1956,6 +1983,28 @@ static cJSON *on_ws_command(
         extern void sd_card_info(char *buf, size_t n);
         if (!sd_card_mounted() && !sd_card_init()) {
             return command_error("no_sd", "no SD card mounted");
+        }
+        if (strcmp(command, "sd.fetch") == 0) {
+            cJSON *url = cJSON_GetObjectItem(params, "url");
+            cJSON *path = cJSON_GetObjectItem(params, "path");
+            cJSON *sha = cJSON_GetObjectItem(params, "sha256");
+            if (!cJSON_IsString(url) || !cJSON_IsString(path)) {
+                return command_error("missing_param", "url and path are required");
+            }
+            draw_url_ctx_t *ctx = calloc(1, sizeof(*ctx));
+            if (!ctx) return command_error("out_of_memory", "failed to allocate");
+            ctx->session_generation = session_generation;
+            strncpy(ctx->request_id, request_id, sizeof(ctx->request_id) - 1);
+            const char *err = NULL;
+            if (!sd_fetch_start(url->valuestring, path->valuestring,
+                                cJSON_IsString(sha) ? sha->valuestring : NULL,
+                                sd_fetch_done, ctx, &err)) {
+                free(ctx);
+                return command_error("sd_error", err);
+            }
+            cJSON *async = cJSON_CreateObject();
+            cJSON_AddBoolToObject(async, "_async", true);
+            return async;
         }
         if (strcmp(command, "sd.info") == 0) {
             char info[64];
@@ -2615,12 +2664,20 @@ static void ota_verify_task(void *arg) {
     (void)arg;
     int64_t deadline = esp_timer_get_time() + OTA_VERIFY_TIMEOUT_US;
     while (esp_timer_get_time() < deadline) {
-        if (noise_ctrl_is_connected()) {
+#if CONFIG_HOMEHUB_DASHBOARD
+        // Also wait for the dashboard to come up and keep running: a crash
+        // there before this point rolls the update back.
+        bool healthy = dashboard_healthy();
+#else
+        bool healthy = true;
+#endif
+        if (noise_ctrl_is_connected() && healthy) {
             if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
                 ESP_LOGI(TAG, "OTA image validated (control WS up)");
             } else {
                 ESP_LOGE(TAG, "esp_ota_mark_app_valid_cancel_rollback failed");
             }
+            ota_crash_guard_ok();
             stack_monitor_record(NULL);
             vTaskDelete(NULL);
             return;
@@ -2708,12 +2765,17 @@ void app_run(void) {
                       app_desc ? app_desc->version : "unknown", identity_sdk_token());
     vm_api_set_sdk_token(identity_sdk_token());
 
+    // Before anything that could crash: fall back to the other firmware slot
+    // after repeated crash resets.
+    ota_crash_guard_boot();
+
     if (!led_status_init()) {
         ESP_LOGW(TAG, "LED init failed — continuing without status LED");
     }
     led_status_set_state(LED_STATE_BOOT);
 #if CONFIG_HOMEHUB_DASHBOARD
     dashboard_init();
+    ota_set_progress_cb(dashboard_ota_progress);
 #endif
 
     heap_snapshot("after config+id");

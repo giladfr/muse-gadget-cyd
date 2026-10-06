@@ -93,6 +93,10 @@ CONFIG_HOMEHUB_DASHBOARD_TOUCH_IRQ=36
 # OTA is enabled in the dashboard fork so future versions can be pushed from
 # the cloud. The two OTA slots are 0x1E0000 (~1.79 MB) each.
 CONFIG_HOMEHUB_OTA_ENABLED=y
+# device.ota may use plain http:// here: a second TLS session does not fit in
+# this board's RAM next to the control session, and the image's RSA signature
+# (checked before it is installed) is what makes it trusted, not the transport.
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 CONFIG_HOMEHUB_SDCARD=y
 CONFIG_HOMEHUB_SDCARD_SCK=18
 CONFIG_HOMEHUB_SDCARD_MOSI=23

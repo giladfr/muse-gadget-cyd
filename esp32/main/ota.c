@@ -20,6 +20,12 @@
 
 #include <stddef.h>
 
+static ota_progress_cb s_progress_cb;
+
+void ota_set_progress_cb(ota_progress_cb cb) {
+    s_progress_cb = cb;
+}
+
 bool ota_is_enabled(void) {
 #if CONFIG_HOMEHUB_OTA_ENABLED
     return true;
@@ -44,6 +50,10 @@ bool ota_is_enabled(void) {
 #include "freertos/task.h"
 
 static const char *TAG = "link.ota";
+
+static void progress(int pct) {
+    if (s_progress_cb) s_progress_cb(pct);
+}
 
 #define OTA_HTTP_TIMEOUT_MS        30000
 #define OTA_MAX_REDIRECTS          5
@@ -209,11 +219,23 @@ static void ota_task(void *arg) {
         goto done;
     }
 
+    int total = esp_https_ota_get_image_size(handle);
+    int last_pct = 0;
+    progress(0);
     while ((err = esp_https_ota_perform(handle)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+        if (total > 0) {
+            int pct = (int)((int64_t)esp_https_ota_get_image_len_read(handle) * 100
+                            / total);
+            if (pct != last_pct && pct <= 100) {
+                last_pct = pct;
+                progress(pct);
+            }
+        }
         // streaming; yield briefly between reads
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     if (err != ESP_OK) {
+        progress(-1);
         char msg[96];
         snprintf(msg, sizeof(msg), "download failed: %s", esp_err_to_name(err));
         ESP_LOGE(TAG, "%s", msg);
@@ -223,6 +245,7 @@ static void ota_task(void *arg) {
     }
     if (!esp_https_ota_is_complete_data_received(handle)) {
         ESP_LOGE(TAG, "incomplete image received");
+        progress(-1);
         esp_https_ota_abort(handle);
         emit(ctx, OTA_RESULT_FAILED, "incomplete image received", new_version, running);
         goto done;
@@ -235,10 +258,12 @@ static void ota_task(void *arg) {
         char msg[96];
         snprintf(msg, sizeof(msg), "verify/finish failed: %s", esp_err_to_name(err));
         ESP_LOGE(TAG, "%s", msg);
+        progress(-1);
         emit(ctx, OTA_RESULT_FAILED, msg, new_version, running);
         goto done;
     }
 
+    progress(100);
     ESP_LOGI(TAG, "applied %s -> %s, rebooting", running, new_version);
     emit(ctx, OTA_RESULT_APPLIED, "applied", new_version, running);
     // Let any status notification flush before the reboot tears down the link.
@@ -302,3 +327,52 @@ void ota_start(const char *url, bool force, ota_status_cb cb, void *user) {
 }
 
 #endif
+
+// ---- crash-loop guard ---------------------------------------------------------
+
+#include "esp_attr.h"
+#include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_system.h"
+
+#define CRASH_GUARD_MAGIC 0x43524153u  // "CRAS"
+#define CRASH_GUARD_LIMIT 3
+
+#if CONFIG_HOMEHUB_OTA_ENABLED
+// Survives software resets (panic, watchdog), not power loss.
+static RTC_NOINIT_ATTR uint32_t s_crash_magic;
+static RTC_NOINIT_ATTR uint32_t s_crash_count;
+#endif
+
+void ota_crash_guard_boot(void) {
+#if CONFIG_HOMEHUB_OTA_ENABLED
+    esp_reset_reason_t r = esp_reset_reason();
+    bool crash = r == ESP_RST_PANIC || r == ESP_RST_INT_WDT
+                 || r == ESP_RST_TASK_WDT || r == ESP_RST_WDT;
+    if (s_crash_magic != CRASH_GUARD_MAGIC) {
+        s_crash_magic = CRASH_GUARD_MAGIC;
+        s_crash_count = 0;
+    }
+    s_crash_count = crash ? s_crash_count + 1 : 0;
+    if (s_crash_count < CRASH_GUARD_LIMIT) return;
+    s_crash_count = 0;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_partition_t *other = esp_ota_get_next_update_partition(running);
+    esp_app_desc_t desc;
+    if (!other || esp_ota_get_partition_description(other, &desc) != ESP_OK) {
+        ESP_LOGE("link.ota", "crash loop, but no other firmware to fall back to");
+        return;
+    }
+    ESP_LOGE("link.ota", "crash loop: %d crashes in a row, booting %s from %s",
+             CRASH_GUARD_LIMIT, desc.version, other->label);
+    // Verifies the image (and its signature) before switching.
+    if (esp_ota_set_boot_partition(other) == ESP_OK) esp_restart();
+    ESP_LOGE("link.ota", "fallback image did not verify; staying");
+#endif
+}
+
+void ota_crash_guard_ok(void) {
+#if CONFIG_HOMEHUB_OTA_ENABLED
+    s_crash_count = 0;
+#endif
+}

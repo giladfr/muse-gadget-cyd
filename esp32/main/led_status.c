@@ -1247,6 +1247,7 @@ void led_status_set_state(led_state_t state) {
 #if CONFIG_HOMEHUB_DASHBOARD
     // The dashboard takes over the screen once the Link session is up.
     if (state == LED_STATE_WS_CONNECTED) dashboard_set_paired(true);
+    dashboard_set_link(state == LED_STATE_WS_CONNECTED);
 #endif
 }
 

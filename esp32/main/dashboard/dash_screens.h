@@ -25,13 +25,38 @@ typedef enum {
 
 const char *dash_screen_name(dash_screen_t s);
 
+// Connection state shown in the header.
+typedef struct {
+    bool link;      // Link session up
+    int wifi_bars;  // 0-3 by signal strength, -1 = not associated
+} dash_status_t;
+
+// The content area between the header and the footer (screen rows).
+#define DASH_CONTENT_Y0 32
+#define DASH_CONTENT_Y1 218
+
 // Build the frame for screen s from the store. *y0/*y1 receive the screen
 // rows [y0, y1) that differ from the previous frame (y0 == y1 when nothing
 // changed); `full` marks the whole screen dirty.
-void dash_screen_prepare(dash_screen_t s, bool full, int *y0, int *y1);
+void dash_screen_prepare(dash_screen_t s, const dash_status_t *st, bool full,
+                         int *y0, int *y1);
 
-// Render one strip (screen rows [sy0, sy0+sh)) of the prepared frame.
+// True while the last prepared frame has something animating (a price-change
+// flash fading out): prepare again soon.
+bool dash_screen_animating(void);
+
+// A full-screen message instead of a dashboard screen (touch calibration,
+// firmware update): a title, a line of text, a hint, a crosshair at (cx, cy)
+// unless cx < 0, and a progress bar unless progress < 0. The next
+// dash_screen_prepare() repaints everything.
+void dash_screen_prepare_message(const char *title, const char *msg,
+                                 const char *hint, int cx, int cy,
+                                 int progress);
+
+// Render one strip (screen rows [sy0, sy0+sh)) of the prepared frame, or of
+// the one before it (the outgoing screen of a slide transition).
 void dash_screen_draw_strip(uint16_t *buf, int sy0, int sh);
+void dash_screen_draw_strip_prev(uint16_t *buf, int sy0, int sh);
 
 #ifdef __cplusplus
 }

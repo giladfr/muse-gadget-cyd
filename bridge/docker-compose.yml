@@ -13,3 +13,5 @@ services:
       - LAT=${LAT:-30.2672}
       - LON=${LON:--97.7431}
       - TZ=${TZ:-America/Chicago}
+      # Place name shown on the weather screen.
+      - LOCATION=${LOCATION:-Austin, TX}
