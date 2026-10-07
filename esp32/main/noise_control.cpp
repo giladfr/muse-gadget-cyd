@@ -112,7 +112,7 @@ static char s_noise_host[256] = NOISE_DEFAULT_HOST;
 // batches, so scratch must fit a full batch plus ServiceFrame/envelope overhead.
 // Chat subscriptions deliver 16 KB body chunks plus framing, even on boards
 // without PSRAM. Reserve enough inbound space for those frames.
-#define SVC_FRAME_SCRATCH (SMALL_CONTROL_SESSION ? 17 * 1024 : 12288)
+#define SVC_FRAME_SCRATCH (DASHBOARD_LEAN_SESSION ? 8 * 1024 : SMALL_CONTROL_SESSION ? 17 * 1024 : 12288)
 
 // The ADV cannot allocate the session with the larger inbound buffers and the
 // usual outbound buffers together. Keep this reduction local to that board.
@@ -122,30 +122,43 @@ static char s_noise_host[256] = NOISE_DEFAULT_HOST;
 #define CARDPUTER_CONTROL_SESSION 0
 #endif
 
+// The CYD dashboard (no PSRAM, no tunnel) only sends small tap/chat messages
+// and receives small command JSON (dashboard.data, dashboard.card). It never
+// carries tunnel batches or chat subscriptions, so its session buffers can be
+// much smaller than the defaults — the full 80 KB does not fit alongside the
+// dashboard's own frame buffers in internal RAM.
+#if CONFIG_HOMEHUB_DASHBOARD && !defined(CONFIG_SPIRAM) && !CONFIG_HOMEHUB_TUNNEL
+#define DASHBOARD_LEAN_SESSION 1
+#else
+#define DASHBOARD_LEAN_SESSION 0
+#endif
+
 // Outbound scratch buffers. Sized for tunnel batches (8 KB) + framing overhead.
-#define OUT_SVC_SCRATCH   (CARDPUTER_CONTROL_SESSION ? 3072 : SMALL_CONTROL_SESSION ? 6144 : 12288)
-#define OUT_ENV_SCRATCH   (CARDPUTER_CONTROL_SESSION ? 3072 : SMALL_CONTROL_SESSION ? 6144 : 12288)
+#define OUT_SVC_SCRATCH   (DASHBOARD_LEAN_SESSION ? 4096 : CARDPUTER_CONTROL_SESSION ? 3072 : SMALL_CONTROL_SESSION ? 6144 : 12288)
+#define OUT_ENV_SCRATCH   (DASHBOARD_LEAN_SESSION ? 4096 : CARDPUTER_CONTROL_SESSION ? 3072 : SMALL_CONTROL_SESSION ? 6144 : 12288)
 
 // Max BodyChunk payload for a single control-stream ServiceFrame. Kept well
 // under the outbound scratch above so the ServiceFrame/envelope always fit;
 // larger control messages (e.g. device.discover results) are split across
 // multiple BodyChunks. The daemon reassembles by the u32-LE length prefix, so
 // chunk boundaries are transparent. Matches the proven ~8 KB tunnel batch size.
-#define CTRL_BODY_CHUNK_MAX (CARDPUTER_CONTROL_SESSION ? 2048 : SMALL_CONTROL_SESSION ? 4096 : 8192)
+#define CTRL_BODY_CHUNK_MAX (DASHBOARD_LEAN_SESSION ? 2048 : CARDPUTER_CONTROL_SESSION ? 2048 : SMALL_CONTROL_SESSION ? 4096 : 8192)
 
 // WebSocket send/receive buffers. The protocol allows 64 KB frames, but
 // outbound frames are bounded by OUT_ENV_SCRATCH and inbound ones by
 // SVC_FRAME_SCRATCH (the decrypted frame must fit there), so without PSRAM use
 // buffers just large enough for those plus framing and the AEAD tag.
-#if CONFIG_SPIRAM
+#if defined(CONFIG_SPIRAM)
 #define WS_BUF_SIZE ClientSession::kMaxOutboundWebSocketPayloadSize
+#elif DASHBOARD_LEAN_SESSION
+#define WS_BUF_SIZE (4 * 1024)
 #elif CARDPUTER_CONTROL_SESSION
 #define WS_BUF_SIZE (4 * 1024)
 #else
 #define WS_BUF_SIZE (SMALL_CONTROL_SESSION ? 7 * 1024 : 16 * 1024)
 #endif
 // Inbound WebSocket frames: SVC_FRAME_SCRATCH plus framing and the AEAD tag.
-#define WS_RX_BUF_SIZE (SMALL_CONTROL_SESSION ? 17 * 1024 : WS_BUF_SIZE)
+#define WS_RX_BUF_SIZE (DASHBOARD_LEAN_SESSION ? 8 * 1024 : SMALL_CONTROL_SESSION ? 17 * 1024 : WS_BUF_SIZE)
 
 static char s_node_id[64];
 static char s_display_name[64];
@@ -1502,21 +1515,39 @@ static char *build_register_json(void) {
             add_command(commands, "sd.list",
                         "List files on the SD card. Optional path param.",
                         nullptr, nullptr);
-            add_command(commands, "sd.read",
-                        "Read a text file from the SD card (max 8KB). "
-                        "Param: path.",
-                        take_required, nullptr);
-            add_command(commands, "sd.write",
-                        "Write a text file to the SD card. "
-                        "Params: path, data.",
-                        take_required, nullptr);
-            add_command(commands, "sd.remove",
-                        "Delete a file from the SD card. Param: path.",
-                        take_required, nullptr);
-            add_command(commands, "display.draw_sd",
-                        "Show a baseline JPEG from the SD card full-screen, "
-                        "with an X button to dismiss. Param: path.",
-                        take_required, nullptr);
+            {
+                // Each command needs its own param objects: cJSON takes
+                // ownership on add, so sharing one object double-frees.
+                cJSON *read_required = cJSON_CreateObject();
+                cJSON_AddItemToObject(read_required, "path",
+                                      string_param("File path on the SD card."));
+                add_command(commands, "sd.read",
+                            "Read a text file from the SD card (max 8KB). "
+                            "Param: path.",
+                            read_required, nullptr);
+                cJSON *write_required = cJSON_CreateObject();
+                cJSON_AddItemToObject(write_required, "path",
+                                      string_param("File path on the SD card."));
+                cJSON_AddItemToObject(write_required, "data",
+                                      string_param("Text to write."));
+                add_command(commands, "sd.write",
+                            "Write a text file to the SD card. "
+                            "Params: path, data.",
+                            write_required, nullptr);
+                cJSON *remove_required = cJSON_CreateObject();
+                cJSON_AddItemToObject(remove_required, "path",
+                                      string_param("File path on the SD card."));
+                add_command(commands, "sd.remove",
+                            "Delete a file from the SD card. Param: path.",
+                            remove_required, nullptr);
+                cJSON *draw_required = cJSON_CreateObject();
+                cJSON_AddItemToObject(draw_required, "path",
+                                      string_param("JPEG path on the SD card."));
+                add_command(commands, "display.draw_sd",
+                            "Show a baseline JPEG from the SD card full-screen, "
+                            "with an X button to dismiss. Param: path.",
+                            draw_required, nullptr);
+            }
 #endif
         }
 #endif
@@ -1586,9 +1617,11 @@ static char *build_register_json(void) {
     // cJSON_PrintUnformatted grows its buffer by doubling, holding the old
     // one each time, so ~2 KB of JSON briefly needs ~6 KB of byte-addressable
     // heap. Right after the handshake there is often not that much, so print
-    // into one buffer sized to fit instead.
+    // into one buffer sized to fit instead. The dashboard's many commands
+    // push the JSON past 8 KB, so allow up to 16 KB (heap has ~30 KB free
+    // in the largest block at this point).
     char *json = nullptr;
-    for (int size = 2048; size <= 8192 && !json; size += 512) {
+    for (int size = 2048; size <= 16384 && !json; size += 1024) {
         json = (char *)malloc(size);
         if (!json) break;
         if (!cJSON_PrintPreallocated(root, json, size, false)) {

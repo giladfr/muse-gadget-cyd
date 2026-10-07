@@ -519,16 +519,29 @@ void dashboard_init(void) {
 #endif
     s_lock = xSemaphoreCreateMutex();
     s_render_lock = xSemaphoreCreateMutex();
+    if (!s_lock || !s_render_lock) {
+        ESP_LOGE(TAG, "no RAM for dashboard locks");
+        return;
+    }
+    // Defer strip buffers and task until paired: BLE + WiFi + TLS during
+    // pairing need the DMA RAM. dashboard_set_paired(true) activates.
+    ESP_LOGI(TAG, "dashboard init deferred, waiting for pairing");
+}
+
+// Allocate strip buffers and start the render task. Called once on pairing.
+static bool dashboard_activate(void) {
+    if (s_task) return true;  // already active
     for (int i = 0; i < 2; i++) {
         s_strip[i] = heap_caps_malloc(DASH_W * DASH_STRIP_H * sizeof(uint16_t),
                                       MALLOC_CAP_DMA);
     }
-    if (!s_lock || !s_render_lock || !s_strip[0] || !s_strip[1]) {
-        ESP_LOGE(TAG, "no RAM for the dashboard (strip buffers / locks)");
-        return;
+    if (!s_strip[0] || !s_strip[1]) {
+        ESP_LOGE(TAG, "no RAM for dashboard strip buffers");
+        return false;
     }
-    ESP_LOGI(TAG, "strip buffers ok, waiting for pairing");
+    ESP_LOGI(TAG, "strip buffers ok, dashboard active");
     xTaskCreate(dash_task, "dashboard", 5120, NULL, 4, &s_task);
+    return s_task != NULL;
 }
 
 void dashboard_set_paired(bool paired) {
@@ -539,7 +552,9 @@ void dashboard_set_paired(bool paired) {
     xSemaphoreGive(s_lock);
     if (paired && !was) {
         ESP_LOGI(TAG, "paired; dashboard will activate");
-        wake();
+        if (dashboard_activate()) {
+            wake();
+        }
     }
 }
 
