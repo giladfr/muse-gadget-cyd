@@ -24,4 +24,10 @@ run() {  # name, extra args
 run cards
 run offline
 run calibration --swap-touch --invert-x
+# Muse's commands and card taps through `musegadget dash-sim` (mac_gadget.sh).
+if python3 "$HERE/test_muse_bridge.py" ./dash_sim > test_muse_bridge.log 2>&1; then
+  echo "ok   muse_bridge ($(grep -c '^ok' test_muse_bridge.log) checks)"
+else
+  echo "FAIL muse_bridge"; grep -E '^FAIL' test_muse_bridge.log || tail -20 test_muse_bridge.log; fail=1
+fi
 exit $fail

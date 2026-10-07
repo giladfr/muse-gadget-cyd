@@ -77,6 +77,7 @@ class Service:
     executor: Executor
     sdk_token: str | None = None
     display_name: str = field(default_factory=socket.gethostname)
+    commands: dict = field(default_factory=lambda: COMMAND_SPECS)
     _stop: asyncio.Event = field(default_factory=asyncio.Event)
     _last_refresh_attempt: float = float("-inf")
     # The SDK token reaches Muse only in refresh bodies until apps forward it at
@@ -134,7 +135,7 @@ class Service:
             node_id=self.identity.node_id,
             display_name=self.display_name,
             version=__version__,
-            commands=COMMAND_SPECS,
+            commands=self.commands,
         )
         session = LinkSession(
             noise_host=pairing.get("noise_host") or DEFAULT_NOISE_HOST,
@@ -259,9 +260,10 @@ class Service:
             pass
 
 
-def run_service(identity: Identity, executor: Executor, sdk_token: str | None = None) -> None:
+def run_service(identity: Identity, executor: Executor, sdk_token: str | None = None,
+                **options) -> None:
     async def main() -> None:
-        service = Service(identity=identity, executor=executor, sdk_token=sdk_token)
+        service = Service(identity=identity, executor=executor, sdk_token=sdk_token, **options)
         loop = asyncio.get_running_loop()
         for signum in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(signum, service.stop)

@@ -69,12 +69,51 @@ Keys: arrows swipe, C calibrate, B/D bright/dark room, L link, S screenshot.
 `--slow-spi` paces drawing like the real 40 MHz bus.
 
 `tools/dash_sim/test.sh` runs the scripted tests in `tools/dash_sim/tests/`
-headless (cards and taps, offline behaviour, calibration); CI runs them, the
-preview and the quote test on every pull request.
+headless (cards and taps, offline behaviour, calibration, the Muse bridge
+below); CI runs them, the preview and the quote test on every pull request.
 
 What it doesn't cover: the ESP32 itself (RAM limits, timing, Wi-Fi, TLS),
-the panel and SD card drivers, OTA, and the real Link session to Muse.
+the panel and SD card drivers, OTA, and the firmware's own Link session code.
 Those still need the board (or a build in CI).
+
+### Driving the simulator from your real Muse (Mac)
+
+Your Mac can pair with Muse as a gadget of its own, "CYD Dashboard
+(simulator)". Muse then sees the CYD's `dashboard.*` commands on it, and
+whatever it sends lands in the simulator window. Taps on card buttons go back
+to Muse as chat messages, as they do from the board. Use it to try the Muse
+side, such as the skill, proactive cards or button answers, before the board
+is on the desk.
+
+```sh
+cd esp32
+tools/dash_sim/mac_gadget.sh pair --sdk-token mgst_...   # once; then add a device in the Muse app
+tools/dash_sim/mac_gadget.sh                             # simulator + Link session
+```
+
+How it works: pairing uses the repo's Linux Device SDK (`linux/`) with a
+CoreBluetooth backend (`linux/src/musegadget/ble_server_macos.py`), so the
+Mac's own Bluetooth does the setup. After that `musegadget dash-sim` holds
+the Link session over the internet and forwards Muse's commands to
+`dash_sim --listen 8765`. `dash_sim --muse-socket` hands button taps to it.
+The script keeps its state, venv and pairing in `~/.musegadget-sim`, and
+`mac_gadget.sh unpair` forgets the pairing. The gadget offers only the
+dashboard commands, never shell or file access to the Mac.
+
+Mac specifics:
+- Allow the terminal under System Settings > Privacy & Security > Bluetooth.
+- macOS apps can't advertise manufacturer data, so the advert has the name
+  and setup service but not the "not paired yet" flag the board sends.
+- The phone checks the Bluetooth device name, which on a Mac is the computer
+  name. So `pair` renames the Mac to the gadget's name (`MuseGadgetXXXXXX`)
+  for the setup window and renames it back afterwards (sudo). If the app
+  still shows the old name, toggle Bluetooth once. `--keep-name` skips the
+  rename.
+
+Untested on a real Mac and phone so far. If the Muse app doesn't list the
+gadget, the likely cause is the missing advert flag. Pairing from a Linux
+machine or Raspberry Pi with `musegadget pair` (BlueZ) works around it.
+Run `tools/dash_sim/mac_gadget.sh` there too; only the rename is Mac-only.
 
 ## Hardware (ESP32-2432S028R)
 

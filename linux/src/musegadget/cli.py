@@ -69,7 +69,10 @@ def _verify_and_save(credentials: Credentials, commit: Callable[[Callable[[], bo
 
 
 def cmd_pair(args: argparse.Namespace) -> int:
-    from musegadget.ble_server import BleServer
+    if sys.platform == "darwin":
+        from musegadget.ble_server_macos import BleServer
+    else:
+        from musegadget.ble_server import BleServer
 
     if config.load_json(config.PAIRING_FILE) and not args.force:
         print("Already paired. Run `musegadget unpair` first, or pass --force.", file=sys.stderr)
@@ -163,6 +166,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dash_sim(args: argparse.Namespace) -> int:
+    from musegadget import dash_sim
+    from musegadget.service import run_service
+
+    try:
+        sdk_token = config.sdk_token()
+    except ValueError as exc:
+        log.warning("running without an SDK token: %s", exc)
+        sdk_token = None
+    log.info("musegadget %s: serving the CYD dashboard simulator on port %d",
+             __version__, args.port)
+    run_service(identity.load_or_create(), dash_sim.DashSimExecutor(args.port), sdk_token,
+                commands=dash_sim.COMMAND_SPECS, display_name=args.name)
+    return 0
+
+
 def cmd_send_user_msg(args: argparse.Namespace) -> int:
     import json
     import socket
@@ -221,6 +240,13 @@ def main(argv: list[str] | None = None) -> int:
         help="account whose permissions commands run with (default: the account that ran sudo)",
     )
     run.set_defaults(func=cmd_run)
+
+    sim = sub.add_parser("dash-sim",
+                         help="serve the CYD dashboard simulator (dash_sim --listen) to the Muse")
+    sim.add_argument("--port", type=int, default=8765, help="dash_sim's port (default: %(default)s)")
+    sim.add_argument("--name", default="CYD Dashboard (simulator)",
+                     help="name shown in the Muse (default: %(default)s)")
+    sim.set_defaults(func=cmd_dash_sim)
 
     send = sub.add_parser("send-user-msg", help="send a message to your Muse from this device")
     send.add_argument("message", nargs="+", help="the message, or - to read it from stdin")

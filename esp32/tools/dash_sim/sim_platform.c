@@ -3,7 +3,7 @@
  * threads, the timer, NVS in a file, the XPT2046 touch controller on its
  * bit-banged pins (driven by the mouse), the backlight PWM and light sensor,
  * Wi-Fi status, the panel's draw calls, and Muse's Link session (chat sends
- * are printed). Everything above this layer is the real firmware code.
+ * are printed, or with --muse-socket delivered through `musegadget dash-sim`). Everything above this layer is the real firmware code.
  */
 #define _GNU_SOURCE
 #include "sim.h"
@@ -14,8 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
+#include "cJSON.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_adc/adc_oneshot.h"
@@ -561,12 +564,84 @@ int64_t noise_ctrl_req_open(const char *verb, const char *path, const char *cons
     return 100;
 }
 
+typedef struct {
+    noise_ctrl_req_cb cb;
+    void *ctx;
+    char *body;
+} chat_job_t;
+
+// One JSON line to musegadget's local socket, one back (its send-user-msg
+// protocol); the session posts the message to /chat/stream as this device.
+static void *deliver_chat(void *p) {
+    chat_job_t *job = p;
+    int status = 502;
+    char *ack = NULL;
+    cJSON *body = cJSON_Parse(job->body);
+    cJSON *msg = cJSON_GetObjectItem(body, "message");
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un addr = {.sun_family = AF_UNIX};
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", g_sim.muse_socket);
+    if (cJSON_IsString(msg) && fd >= 0
+        && connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+        cJSON *req = cJSON_CreateObject();
+        cJSON_AddStringToObject(req, "message", msg->valuestring);
+        char *line = cJSON_PrintUnformatted(req);
+        cJSON_Delete(req);
+        FILE *f = fdopen(fd, "r+");
+        if (f && line) {
+            fprintf(f, "%s\n", line);
+            fflush(f);
+            char reply[4096];
+            if (fgets(reply, sizeof(reply), f)) {
+                cJSON *r = cJSON_Parse(reply);
+                cJSON *code = cJSON_GetObjectItem(r, "status");
+                status = cJSON_IsTrue(cJSON_GetObjectItem(r, "ok")) ? 200
+                       : cJSON_IsNumber(code) ? code->valueint : 503;
+                ack = r ? cJSON_PrintUnformatted(r) : strdup(reply);
+                cJSON_Delete(r);
+                if (ack) ack[strcspn(ack, "\r\n")] = '\0';
+            }
+        }
+        free(line);
+        if (f) fclose(f); else close(fd);
+        fd = -1;
+    }
+    if (fd >= 0) close(fd);
+    printf("[link] Muse answered %d: %s\n", status, ack ? ack : "(no reply)");
+    fflush(stdout);
+    if (!ack) ack = strdup("{\"error\":\"musegadget dash-sim unreachable\"}");
+    job->cb(job->ctx, status, (const uint8_t *)ack, strlen(ack), true);
+    free(ack);
+    cJSON_Delete(body);
+    free(job->body);
+    free(job);
+    return NULL;
+}
+
 bool noise_ctrl_req_send(int64_t id, const void *data, size_t len, bool end_body, int wait_ms) {
     (void)id;
     (void)end_body;
     (void)wait_ms;
     printf("[link] -> Muse: %.*s\n", (int)len, (const char *)data);
     fflush(stdout);
+    if (g_sim.muse_socket[0]) {
+        // Answered later, from another thread, like the session task's ack.
+        chat_job_t *job = calloc(1, sizeof(*job));
+        if (!job || !(job->body = strndup(data, len))) {
+            free(job);
+            return false;
+        }
+        job->cb = s_req_cb;
+        job->ctx = s_req_ctx;
+        pthread_t th;
+        if (pthread_create(&th, NULL, deliver_chat, job) != 0) {
+            free(job->body);
+            free(job);
+            return false;
+        }
+        pthread_detach(th);
+        return true;
+    }
     // Muse's acknowledgement (or a refusal, with --chat-fail).
     int status = g_sim.chat_ok ? 200 : 503;
     const char *ack = g_sim.chat_ok ? "{\"id\":\"sim-msg\"}" : "{\"error\":\"unavailable\"}";

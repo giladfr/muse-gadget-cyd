@@ -6,6 +6,7 @@
  *
  *   dash_sim [--scale N] [--headless] [--script FILE] [--nvs FILE]
  *            [--swap-touch] [--invert-x] [--invert-y] [--chat-fail] [--slow-spi]
+ *            [--listen PORT] [--muse-socket PATH]
  *
  * Console (stdin or --script), one per line:
  *   <muse command> [JSON params]   e.g. dashboard.card {"id":"x","title":"Hi"}
@@ -14,15 +15,24 @@
  *   ota PCT|fail | image FILE.bmp | snap FILE.bmp | help | quit
  *   expect TEXT   (scripts: fail the run unless the last output contains TEXT)
  *
+ * Connected to a real Muse (tools/dash_sim/mac_gadget.sh): --listen takes
+ * Muse's commands from `musegadget dash-sim` on 127.0.0.1:PORT, one JSON line
+ * {"command": ..., "params": {...}} per connection, and --muse-socket sends
+ * card button taps to Muse through that service's local socket.
+ *
  * Keys: Left/Right swipe, C calibrate, B/D bright/dark room, L link toggle,
  * S screenshot (sim-NNN.bmp), Q quit.
  */
 #define _GNU_SOURCE
 #include <SDL.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include "cJSON.h"
@@ -33,6 +43,8 @@ static int s_scale = 2;
 static volatile bool s_quit;
 static char s_last[8192];  // the last command's output, for "expect"
 static int s_failures;
+// The console and the Muse listener each run commands.
+static pthread_mutex_t s_cmd_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // ---- screenshots -------------------------------------------------------------
 
@@ -250,7 +262,9 @@ static void run_line(char *line) {
             printf("bad JSON params\n");
             return;
         }
+        pthread_mutex_lock(&s_cmd_lock);
         cJSON *r = muse_command(cmd, params);
+        pthread_mutex_unlock(&s_cmd_lock);
         cJSON_Delete(params);
         if (!r) {
             printf("unknown command '%s' (try help)\n", cmd);
@@ -276,6 +290,75 @@ static void *console_thread(void *p) {
     while (!s_quit && fgets(line, sizeof(line), con->in)) run_line(line);
     if (con->quit_at_end) s_quit = true;
     return NULL;
+}
+
+// ---- Muse, through `musegadget dash-sim` -------------------------------------
+
+static void serve_client(int fd) {
+    FILE *f = fdopen(fd, "r+");
+    if (!f) {
+        close(fd);
+        return;
+    }
+    static char line[16384];
+    cJSON *r = NULL;
+    if (fgets(line, sizeof(line), f)) {
+        cJSON *req = cJSON_Parse(line);
+        cJSON *cmd = cJSON_GetObjectItem(req, "command");
+        cJSON *params = cJSON_GetObjectItem(req, "params");
+        if (!cJSON_IsString(cmd)) {
+            r = fail("expected {\"command\": ..., \"params\": {...}}");
+        } else {
+            if (!cJSON_IsObject(params)) {
+                cJSON_DeleteItemFromObject(req, "params");
+                params = cJSON_AddObjectToObject(req, "params");
+            }
+            char *shown = cJSON_PrintUnformatted(params);
+            printf("[muse] %s %s\n", cmd->valuestring, shown ? shown : "");
+            free(shown);
+            pthread_mutex_lock(&s_cmd_lock);
+            r = muse_command(cmd->valuestring, params);
+            pthread_mutex_unlock(&s_cmd_lock);
+            if (!r) r = fail("unknown command");
+        }
+        cJSON_Delete(req);
+    }
+    if (r) {
+        char *out = cJSON_PrintUnformatted(r);
+        if (out) fprintf(f, "%s\n", out);
+        free(out);
+        cJSON_Delete(r);
+    }
+    fclose(f);
+}
+
+static void *listen_thread(void *p) {
+    int srv = (int)(intptr_t)p;
+    while (!s_quit) {
+        int fd = accept(srv, NULL, NULL);
+        if (fd >= 0) serve_client(fd);
+    }
+    return NULL;
+}
+
+// Localhost only: anything that can connect can drive the dashboard.
+static bool start_listener(int port) {
+    int srv = socket(AF_INET, SOCK_STREAM, 0);
+    int one = 1;
+    setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (srv < 0 || bind(srv, (struct sockaddr *)&addr, sizeof(addr)) != 0
+        || listen(srv, 4) != 0) {
+        fprintf(stderr, "can't listen on 127.0.0.1:%d\n", port);
+        if (srv >= 0) close(srv);
+        return false;
+    }
+    printf("taking Muse commands on 127.0.0.1:%d\n", port);
+    pthread_t th;
+    pthread_create(&th, NULL, listen_thread, (void *)(intptr_t)srv);
+    pthread_detach(th);
+    return true;
 }
 
 // ---- window -------------------------------------------------------------------
@@ -315,6 +398,7 @@ static void title(SDL_Window *w) {
 int main(int argc, char **argv) {
     bool headless = false, chat_fail = false;
     const char *script = NULL;
+    int listen_port = 0;
     snprintf(g_sim.nvs_path, sizeof(g_sim.nvs_path), "dash_sim_nvs.txt");
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--scale") && i + 1 < argc) s_scale = atoi(argv[++i]);
@@ -327,14 +411,19 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--invert-y")) g_sim.touch_invert_y = true;
         else if (!strcmp(argv[i], "--chat-fail")) chat_fail = true;
         else if (!strcmp(argv[i], "--slow-spi")) g_sim.slow_spi = true;
+        else if (!strcmp(argv[i], "--listen") && i + 1 < argc) listen_port = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--muse-socket") && i + 1 < argc)
+            snprintf(g_sim.muse_socket, sizeof(g_sim.muse_socket), "%s", argv[++i]);
         else {
             fprintf(stderr, "usage: %s [--scale N] [--headless] [--script FILE] [--nvs FILE]\n"
-                    "  [--swap-touch] [--invert-x] [--invert-y] [--chat-fail] [--slow-spi]\n",
+                    "  [--swap-touch] [--invert-x] [--invert-y] [--chat-fail] [--slow-spi]\n"
+                    "  [--listen PORT] [--muse-socket PATH]\n",
                     argv[0]);
             return 2;
         }
     }
     g_sim.chat_ok = !chat_fail;
+    signal(SIGPIPE, SIG_IGN);  // a Muse client that hangs up mustn't end the sim
     setvbuf(stdout, NULL, _IOLBF, 0);
     sim_nvs_load();
 
@@ -342,6 +431,7 @@ int main(int argc, char **argv) {
     dashboard_init();
     dashboard_set_link(true);
     dashboard_set_paired(true);
+    if (listen_port && !start_listener(listen_port)) return 1;
 
     console_t con = {stdin, false};
     if (script) {

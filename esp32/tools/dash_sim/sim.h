@@ -23,6 +23,8 @@ typedef struct {
     // Throttle panel transfers like a 40 MHz SPI bus.
     bool slow_spi;
     char nvs_path[256];
+    // musegadget's local socket: chat sends go to the real Muse through it.
+    char muse_socket[104];  // sun_path holds 104 bytes on macOS
 } sim_state_t;
 
 extern sim_state_t g_sim;
