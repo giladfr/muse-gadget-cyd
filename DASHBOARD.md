@@ -12,8 +12,9 @@ itself back.
 ## What it is
 
 - **Screens:** stocks (with sparklines and a flash when a price moves),
-  weather (icons, 4-day forecast), and today's calendar (past events dimmed,
-  the next one highlighted). Long lists switch to compact rows.
+  weather (icons, 4-day forecast), today's and tomorrow's calendar (past
+  events dimmed, the next one highlighted), and an analog clock with Israel
+  time under it. Long lists switch to compact rows.
 - **Header:** clock (SNTP + your time zone), Link status dot, Wi-Fi bars.
 - **Touch:** swipe or tap the `<` `>` zones; screens slide. Hold a finger
   down for 5 s to calibrate touch.
@@ -30,7 +31,7 @@ itself back.
   Muse as a chat message, so Muse can ask and you answer with one tap.
 - **Over the air:** firmware (`device.ota`) and SD-card files (`sd.fetch`).
 
-Version: `esp32/version.txt` (1.4.5).
+Version: `esp32/version.txt` (1.5.4).
 
 ## Preview without a board
 
@@ -150,6 +151,34 @@ board online:
   instead of at boot.
 - **v1.4.5 — Night backlight 5% → 25%.** At 5% the quadratic brightness curve
   gives a PWM duty of ~2/1023 — essentially black.
+
+## Clock screen (v1.5.0–v1.5.4)
+
+- **v1.5.0/v1.5.1 bug — "Nothing scheduled" on the Clock screen, green
+  artifacts.** `draw_clock` called `dash_line(..., DASH_WHITE, 3)`, but the
+  signature is `dash_line(..., float width, uint16_t colour)`. Each tick and
+  hand became a line 65535 px wide in colour `0x0003` (green on this panel,
+  which takes the high byte first). Every strip then ran its distance test
+  over ~65,000 columns per row: 867 ms per frame on a desktop PC, minutes on
+  the ESP32 (no hardware square root). The slide into the Clock screen draws
+  the header and dots first, then crawls through the content, so the
+  previous screen's "Nothing scheduled" stayed up. It was never memory
+  corruption, and `s_animating` only made it redraw that slow frame forever.
+- **v1.5.2/v1.5.3 Israel time leaked RAM.** `dash_clock_israel()` switched
+  `TZ` with `setenv()`. newlib allocates a new string when the value grows
+  (Israel's TZ is longer than Chicago's) and never frees the old one, so each
+  redraw leaked ~30 bytes of internal RAM. Other tasks could also read Israel
+  time while `TZ` was switched. v1.5.4 computes it from UTC (checked against
+  zoneinfo on 1.1 M timestamps, 2024–2040).
+- **v1.5.4 analog clock:** face, 60 ticks, hour/minute hands and an amber
+  second hand. The hand tips are computed once per frame. Each second only
+  the rows the hands sweep are repainted (about 110 of 240), and the Israel
+  line only when its minute changes. On the Clock screen the dashboard wakes
+  on each wall-clock second instead of the 5 s header tick. The v1.5.2
+  digital clock drew its time in the 58 px font, whose glyphs are only
+  digits, space and minus, so colons and AM/PM were missing.
+- The boot splash now ends on time (it waited for the next 5 s tick) and
+  repaints the screen when it does. Taps during the splash are ignored.
 
 **Pairing notes:**
 - Pairing needs BLE + WiFi + TLS simultaneously. If it fails with

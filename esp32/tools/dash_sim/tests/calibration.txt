@@ -1,6 +1,7 @@
 # Start with --swap-touch --invert-x: a panel mounted the other way round.
 # Taps land wrong until the 5 s hold + three-target calibration fixes them.
-sleep 800
+# Past the 2.5 s version splash, which ignores taps.
+sleep 3000
 tap 100 50
 dashboard.debug
 expect last=(66,164)

@@ -10,6 +10,7 @@
 
 #include <ctype.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +57,11 @@
 // Card button bar.
 #define BUTTON_H 30
 #define CARD_TEXT_LINES 4
+// Analog clock face, and the Israel time line under it.
+#define CLOCK_R 70
+#define CLOCK_CX (DASH_W / 2)
+#define CLOCK_CY (CONTENT_Y + 4 + CLOCK_R)
+#define CLOCK_IL_Y (CLOCK_CY + CLOCK_R + 8)
 
 typedef struct {
     char symbol[12];
@@ -120,12 +126,9 @@ typedef struct {
             int n;
         } cal;
         struct {
-            int hour;      // 0-23 local
-            int minute;    // 0-59 local
-            int second;    // 0-59 local
-            char date[24]; // "Tuesday, Oct 6"
-            char israel[16]; // "14:30" Israel time
-            bool valid;
+            // Hand tips (and the second hand's tail), in screen pixels.
+            float hour_x, hour_y, min_x, min_y, sec_x, sec_y, tail_x, tail_y;
+            char israel[24];  // "Israel 14:30"
         } clock;
         struct {
             dash_card_t c;
@@ -374,38 +377,55 @@ static void build_calendar(frame_t *f, const dash_store_t *st, bool tomorrow) {
     f->u.cal.n = shown;
 }
 
+// Hand angle in radians, clockwise from 12, for `turns` of a full circle.
+static void hand(float turns, float len, float *x, float *y) {
+    float a = turns * 6.2831853f;
+    *x = CLOCK_CX + len * sinf(a);
+    *y = CLOCK_CY - len * cosf(a);
+}
+
 static void build_clock(frame_t *f) {
-    struct tm tm;
-    struct tm il;
-    f->u.clock.valid = false;
+    struct tm tm, il;
     if (!dash_clock_local(&tm)) {
-        snprintf(f->empty_msg, sizeof(f->empty_msg), "Clock not set");
         f->empty = true;
+        snprintf(f->empty_msg, sizeof(f->empty_msg), "Clock not set");
+        snprintf(f->empty_hint, sizeof(f->empty_hint), "Waiting for network time");
         return;
     }
-    f->empty = false;
-    f->u.clock.valid = true;
-    f->u.clock.hour = tm.tm_hour;
-    f->u.clock.minute = tm.tm_min;
-    f->u.clock.second = tm.tm_sec;
-    // Date: "Tuesday, Oct 6"
-    static const char *days[] = {"Sunday","Monday","Tuesday","Wednesday",
-                                  "Thursday","Friday","Saturday"};
-    static const char *months[] = {"Jan","Feb","Mar","Apr","May","Jun",
-                                    "Jul","Aug","Sep","Oct","Nov","Dec"};
-    snprintf(f->u.clock.date, sizeof(f->u.clock.date), "%s, %s %d",
-             days[tm.tm_wday % 7], months[tm.tm_mon % 12], tm.tm_mday);
-    // Israel time
+    static const char *const days[] = {"Sunday", "Monday", "Tuesday", "Wednesday",
+                                       "Thursday", "Friday", "Saturday"};
+    static const char *const months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    char date[32];
+    snprintf(date, sizeof(date), "%s, %s %d", days[tm.tm_wday % 7],
+             months[tm.tm_mon % 12], tm.tm_mday);
+    set_sub(f, date);
+    // Whole seconds only: the frame changes once a second, and only the
+    // hands' rows are repainted (see dash_screen_prepare).
+    float sec = tm.tm_sec / 60.0f;
+    float min = (tm.tm_min + sec) / 60.0f;
+    float hr = ((tm.tm_hour % 12) + min) / 12.0f;
+    hand(hr, CLOCK_R * 0.5f, &f->u.clock.hour_x, &f->u.clock.hour_y);
+    hand(min, CLOCK_R * 0.78f, &f->u.clock.min_x, &f->u.clock.min_y);
+    hand(sec, CLOCK_R * 0.86f, &f->u.clock.sec_x, &f->u.clock.sec_y);
+    hand(sec + 0.5f, CLOCK_R * 0.2f, &f->u.clock.tail_x, &f->u.clock.tail_y);
     if (dash_clock_israel(&il)) {
-        snprintf(f->u.clock.israel, sizeof(f->u.clock.israel), "%02d:%02d",
+        snprintf(f->u.clock.israel, sizeof(f->u.clock.israel), "Israel %02d:%02d",
                  il.tm_hour, il.tm_min);
-    } else {
-        snprintf(f->u.clock.israel, sizeof(f->u.clock.israel), "--:--");
     }
-    // Don't set s_animating: the header tick refreshes once per second,
-    // which is enough for the second hand. Continuous redraws starve the
-    // DMA heap on this no-PSRAM board.
-    set_sub(f, f->u.clock.date);
+}
+
+// Rows [y0, y1) the hands cover, including their width.
+static void clock_hand_rows(const frame_t *f, int *y0, int *y1) {
+    const float ys[] = {f->u.clock.hour_y, f->u.clock.min_y, f->u.clock.sec_y,
+                        f->u.clock.tail_y, CLOCK_CY};
+    float lo = ys[0], hi = ys[0];
+    for (size_t i = 1; i < sizeof(ys) / sizeof(ys[0]); i++) {
+        if (ys[i] < lo) lo = ys[i];
+        if (ys[i] > hi) hi = ys[i];
+    }
+    *y0 = (int)lo - 6;  // half the widest hand, the hub, anti-aliasing
+    *y1 = (int)hi + 7;
 }
 
 // Word-wrap `text` into up to CARD_TEXT_LINES lines of at most max_w pixels;
@@ -566,8 +586,18 @@ void dash_screen_prepare(int s, const dash_status_t *st, bool full, int *y0,
         diff_rows(y0, y1, s_prev->u.cal.n, s_frame->u.cal.n,
                   s_prev->u.cal.rows, s_frame->u.cal.rows, sizeof(event_row_t));
     } else if (s == DASH_SCREEN_CLOCK) {
-        // Clock animates every second; always redraw the content area.
-        mark(y0, y1, CONTENT_Y, DASH_CONTENT_Y1);
+        // Only the rows the hands sweep (old and new positions), and the
+        // Israel line when its minute turns.
+        if (memcmp(&s_prev->u.clock, &s_frame->u.clock,
+                   offsetof(typeof(s_frame->u.clock), israel))) {
+            int a0, a1, b0, b1;
+            clock_hand_rows(s_prev, &a0, &a1);
+            clock_hand_rows(s_frame, &b0, &b1);
+            mark(y0, y1, a0 < b0 ? a0 : b0, a1 > b1 ? a1 : b1);
+        }
+        if (strcmp(s_prev->u.clock.israel, s_frame->u.clock.israel)) {
+            mark(y0, y1, CLOCK_IL_Y, CLOCK_IL_Y + dash_font_body.line_h);
+        }
     } else if (memcmp(&s_prev->u, &s_frame->u, sizeof(s_frame->u)) != 0) {
         mark(y0, y1, CONTENT_Y, DASH_CONTENT_Y1);
     }
@@ -759,34 +789,45 @@ static void draw_weather(uint16_t *buf, int sy0, int sh, const frame_t *f) {
 }
 
 static void draw_clock(uint16_t *buf, int sy0, int sh, const frame_t *f) {
-    if (!f->u.clock.valid) {
+    if (f->empty) {
         draw_empty(buf, sy0, sh, f);
         return;
     }
-    // Simple digital clock (analog face disabled for debugging).
-    // Center the time big, date below, Israel time at bottom.
-    int cy = (DASH_CONTENT_Y0 + DASH_CONTENT_Y1) / 2;
-    char time_str[16];
-#if CONFIG_HOMEHUB_DASHBOARD_CLOCK_24H
-    snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d",
-             f->u.clock.hour, f->u.clock.minute, f->u.clock.second);
-#else
-    int h = f->u.clock.hour % 12;
-    snprintf(time_str, sizeof(time_str), "%d:%02d:%02d %s",
-             h ? h : 12, f->u.clock.minute, f->u.clock.second,
-             f->u.clock.hour < 12 ? "AM" : "PM");
-#endif
-    // Big time
-    dash_text_c(buf, sy0, sh, F_HUGE, 0, DASH_W, cy - 40,
-                time_str, DASH_TEXT);
-    // Date
-    dash_text_c(buf, sy0, sh, F_BODY, 0, DASH_W, cy + 10,
-                f->u.clock.date, DASH_TEXT2);
-    // Israel time
-    char israel_line[32];
-    snprintf(israel_line, sizeof(israel_line), "Israel %s", f->u.clock.israel);
-    dash_text_c(buf, sy0, sh, F_BODY, 0, DASH_W, cy + 35,
-                israel_line, DASH_TEXT2);
+    const float cx = CLOCK_CX, cy = CLOCK_CY, r = CLOCK_R;
+    if (sy0 < cy + r + 2 && sy0 + sh > cy - r - 2) {
+        // Face: a raised rim and the card colour inside.
+        dash_circle(buf, sy0, sh, cx, cy, r, DASH_CARD2);
+        dash_circle(buf, sy0, sh, cx, cy, r - 2, DASH_CARD);
+        // Ticks: 12 hour marks, the quarters longer, and faint minutes.
+        // dash_line returns at once for a strip it doesn't touch.
+        static float tick_sin[60], tick_cos[60];
+        if (tick_cos[0] == 0) {
+            for (int i = 0; i < 60; i++) {
+                tick_sin[i] = sinf(i * 6.2831853f / 60);
+                tick_cos[i] = cosf(i * 6.2831853f / 60);
+            }
+        }
+        for (int i = 0; i < 60; i++) {
+            bool hour = i % 5 == 0, quarter = i % 15 == 0;
+            float r0 = r - (quarter ? 15 : hour ? 11 : 7), r1 = r - 6;
+            dash_line(buf, sy0, sh, cx + r0 * tick_sin[i], cy - r0 * tick_cos[i],
+                      cx + r1 * tick_sin[i], cy - r1 * tick_cos[i],
+                      hour ? 2.5f : 1.0f, hour ? DASH_TEXT2 : DASH_TEXT3);
+        }
+        // Hands: hour and minute, then the second hand with a short tail.
+        dash_line(buf, sy0, sh, cx, cy, f->u.clock.hour_x, f->u.clock.hour_y,
+                  5.0f, DASH_TEXT);
+        dash_line(buf, sy0, sh, cx, cy, f->u.clock.min_x, f->u.clock.min_y,
+                  3.0f, DASH_TEXT);
+        dash_line(buf, sy0, sh, f->u.clock.tail_x, f->u.clock.tail_y,
+                  f->u.clock.sec_x, f->u.clock.sec_y, 1.5f, DASH_ACCENT);
+        dash_circle(buf, sy0, sh, cx, cy, 4.5f, DASH_ACCENT);
+        dash_circle(buf, sy0, sh, cx, cy, 1.5f, DASH_CARD);
+    }
+    if (f->u.clock.israel[0]) {
+        dash_text_c(buf, sy0, sh, F_BODY, 0, DASH_W, CLOCK_IL_Y, f->u.clock.israel,
+                    DASH_TEXT2);
+    }
 }
 
 static void draw_calendar(uint16_t *buf, int sy0, int sh, const frame_t *f) {

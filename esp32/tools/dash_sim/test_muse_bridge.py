@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(HERE, "../../../linux/src"))
 from musegadget.dash_sim import COMMAND_SPECS, DashSimExecutor  # noqa: E402
 
 SCRIPT = """\
-sleep 2500
+sleep 3500
 tap 80 202
 sleep 1500
 dashboard.events {"peek":true}

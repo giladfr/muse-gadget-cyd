@@ -3,8 +3,10 @@
  */
 #include "dash_clock.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <sys/time.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
@@ -53,30 +55,48 @@ bool dash_clock_local(struct tm *out) {
     return true;
 }
 
-// Israel: IST (UTC+2), IDT (UTC+3) during daylight saving.
-// DST: starts Friday before last Sunday in March, ends last Sunday in October.
-#define TZ_ISRAEL "IST-2IDT,M3.4.4/26,M10.5.0"
+// Israel time, computed rather than by switching TZ: setenv() on newlib
+// never frees the old value when the new one is longer, so swapping TZ back
+// and forth leaked ~30 bytes of internal RAM per call (every redraw), and
+// other tasks could read local time while TZ pointed at Israel.
+//
+// Israel Standard Time is UTC+2; daylight time (UTC+3) runs from the Friday
+// before the last Sunday of March, 02:00 local (00:00 UTC), to the last
+// Sunday of October, 02:00 local daylight time (23:00 UTC the day before).
+
+// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant).
+static int64_t days_from_civil(int y, int m, int d) {
+    y -= m <= 2;
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    int yoe = (int)(y - era * 400);
+    int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+// Day number of the last Sunday of a 31-day month (March, October).
+static int64_t last_sunday(int year, int month) {
+    int64_t d = days_from_civil(year, month, 31);
+    int wday = (int)((d + 4) % 7);  // 1970-01-01 was a Thursday (4)
+    return d - wday;
+}
+
+void dash_clock_israel_at(time_t utc, struct tm *out) {
+    struct tm u;
+    gmtime_r(&utc, &u);
+    int year = u.tm_year + 1900;
+    int64_t dst_start = (last_sunday(year, 3) - 2) * 86400;    // Fri 00:00 UTC
+    int64_t dst_end = last_sunday(year, 10) * 86400 - 3600;    // Sat 23:00 UTC
+    bool dst = (int64_t)utc >= dst_start && (int64_t)utc < dst_end;
+    time_t local = utc + (dst ? 3 : 2) * 3600;
+    gmtime_r(&local, out);
+    out->tm_isdst = dst;
+}
 
 bool dash_clock_israel(struct tm *out) {
     time_t now = time(NULL);
     if (now <= VALID_AFTER) return false;
-    tz_once();
-    // Save current TZ, switch to Israel, convert, restore.
-    const char *old_tz = getenv("TZ");
-    char old_buf[64];
-    if (old_tz) {
-        strncpy(old_buf, old_tz, sizeof(old_buf) - 1);
-        old_buf[sizeof(old_buf) - 1] = '\0';
-    }
-    setenv("TZ", TZ_ISRAEL, 1);
-    tzset();
-    localtime_r(&now, out);
-    if (old_tz) {
-        setenv("TZ", old_buf, 1);
-    } else {
-        unsetenv("TZ");
-    }
-    tzset();
+    dash_clock_israel_at(now, out);
     return true;
 }
 

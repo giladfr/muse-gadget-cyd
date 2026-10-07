@@ -250,6 +250,11 @@ int main(void) {
     tap(20, 228); settle(500);  // "<" to stocks
     snap("stocks_compact");
 
+    // "<" from the first screen wraps to the clock (Tue 10:42:xx CDT).
+    tap(20, 228); settle(500);
+    snap("clock");
+    tap(300, 228); settle(500);  // ">" back to stocks
+
     // Firmware update progress.
     dashboard_ota_progress(0); settle(150);
     dashboard_ota_progress(42); settle(300);

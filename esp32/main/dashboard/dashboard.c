@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "esp_app_desc.h"
 
@@ -48,8 +49,11 @@ typedef enum {
 } dash_state_t;
 
 // How often the header (clock, age label, Wi-Fi) is re-checked; only rows
-// that changed are repainted.
+// that changed are repainted. The clock screen ticks every second, on the
+// second, for its second hand.
 #define HEADER_REFRESH_MS 5000
+// Land this far past the second, so the frame reads the new second.
+#define CLOCK_TICK_SLACK_MS 15
 // Wake-up fallback while idle: covers a lost pen-down interrupt. Without the
 // interrupt, poll fast enough to catch a tap.
 #define IDLE_WAKE_MS 500
@@ -70,7 +74,8 @@ static int s_screen = DASH_SCREEN_STOCKS;  // or DASH_SCREEN_COUNT + card
 static int s_slide = 0;          // pending screen change: -1 / +1
 static bool s_paired = false;
 static bool s_link = false;
-static int64_t s_splash_until = 0;  // show version splash until this time (us)
+static int64_t s_splash_until = 0;  // version splash until this now_ms()
+static int64_t s_next_tick_ms = 0;  // next header/clock refresh (renderer only)
 static bool s_full = false;      // repaint the whole screen
 static bool s_changed = false;   // data changed: diff and repaint those rows
 static bool s_restore = false;   // leaving an image: reset the panel first
@@ -381,20 +386,33 @@ static void activate(void) {
     xSemaphoreGive(s_lock);
 }
 
+// Milliseconds until the wall clock's next whole second.
+static int ms_to_next_second(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return 1000 - (int)(tv.tv_usec / 1000);
+}
+
 static TickType_t next_wait(bool active) {
     if (!active) return portMAX_DELAY;  // dashboard_set_paired() wakes us
     if (dash_touch_tracking()) return pdMS_TO_TICKS(DASH_TOUCH_FAST_MS);
     if (s_state == DASH_ACTIVE && dash_screen_animating()) {
         return pdMS_TO_TICKS(ANIM_WAKE_MS);
     }
-    return pdMS_TO_TICKS(dash_touch_irq_driven() ? IDLE_WAKE_MS : POLL_WAKE_MS);
+    int64_t ms = dash_touch_irq_driven() ? IDLE_WAKE_MS : POLL_WAKE_MS;
+    // Wake for the next refresh rather than up to IDLE_WAKE_MS after it, so
+    // the second hand doesn't stutter or skip.
+    if (s_state == DASH_ACTIVE) {
+        int64_t due = s_next_tick_ms - now_ms();
+        if (due < ms) ms = due > 0 ? due : 0;
+    }
+    return pdMS_TO_TICKS(ms) + 1;
 }
 
 static void dash_task(void *arg) {
     (void)arg;
     bool active = false;
     bool need_full = false;  // last frame was cut short
-    int64_t next_header_ms = 0;
 
     for (;;) {
         ulTaskNotifyTake(pdTRUE, next_wait(active));
@@ -408,6 +426,7 @@ static void dash_task(void *arg) {
             active = true;
             // Show version splash for 2.5 seconds on boot.
             s_splash_until = now_ms() + 2500;
+            s_next_tick_ms = s_splash_until;  // wake to end it
         }
 
         dash_backlight_update();
@@ -488,10 +507,19 @@ static void dash_task(void *arg) {
             dashboard_display_set_active(true);
             full = true;
         }
-        bool tick = now >= next_header_ms;
+        // The splash just ended: the first dashboard frame repaints it all.
+        if (s_splash_until && now >= s_splash_until) {
+            s_splash_until = 0;
+            full = true;
+        }
+        bool tick = now >= s_next_tick_ms;
         bool anim = dash_screen_animating();
         if (!(full || need_full || changed || tick || slide || anim)) continue;
-        if (tick) next_header_ms = now + HEADER_REFRESH_MS;
+        if (tick || slide) {
+            s_next_tick_ms = sc == DASH_SCREEN_CLOCK && dash_clock_valid()
+                                 ? now + ms_to_next_second() + CLOCK_TICK_SLACK_MS
+                                 : now + HEADER_REFRESH_MS;
+        }
 
         dash_status_t status;
         wifi_status(&status);
@@ -499,7 +527,7 @@ static void dash_task(void *arg) {
         int y0, y1;
         bool repaint = full || need_full;
         // Boot splash: show version for 2.5s after activation.
-        if (s_splash_until && now < s_splash_until) {
+        if (s_splash_until) {
             const esp_app_desc_t *desc = esp_app_get_description();
             char ver[40];
             snprintf(ver, sizeof(ver), "v%s", desc->version);
@@ -507,7 +535,6 @@ static void dash_task(void *arg) {
                                         -1, -1, -1);
             y0 = 0; y1 = DASH_H;
         } else {
-            s_splash_until = 0;
             dash_screen_prepare(sc, &status, repaint || slide, &y0, &y1);
         }
         if (slide && !repaint) {

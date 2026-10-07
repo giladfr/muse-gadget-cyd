@@ -1,6 +1,7 @@
 # No network (CI, or Nasdaq unreachable): quotes back off without parking
 # symbols, and Muse refusing a chat turn leaves the tap queued.
-sleep 1500
+# Past the 2.5 s version splash, which ignores taps.
+sleep 3000
 dashboard.stocks
 expect heap_skips=0
 chat fail
