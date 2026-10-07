@@ -395,7 +395,7 @@ menu "ESP32 Device SDK"
         int "Backlight: night brightness (percent)"
         depends on HOMEHUB_DASHBOARD
         range 0 100
-        default 5
+        default 25
 
     config HOMEHUB_DASHBOARD_BL_IDLE_MIN
         int "Backlight: dim after N minutes without a touch (0 = never)"
