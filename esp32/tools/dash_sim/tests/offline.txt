@@ -1,0 +1,15 @@
+# No network (CI, or Nasdaq unreachable): quotes back off without parking
+# symbols, and Muse refusing a chat turn leaves the tap queued.
+sleep 1500
+dashboard.stocks
+expect heap_skips=0
+chat fail
+dashboard.card {"json":{"id":"q","title":"Q","buttons":[{"id":"a","label":"A"}],"show":true}}
+sleep 700
+tap 160 202
+sleep 300
+dashboard.debug
+expect failed=1
+dashboard.events {"peek":true}
+expect "delivered":false
+quit

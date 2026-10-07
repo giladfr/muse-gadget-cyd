@@ -59,6 +59,37 @@ jobs:
           . "$IDF_PATH/export.sh" > /dev/null
           python -m unittest discover -s tests -p 'test_*.py' -v
 
+  dashboard:
+    name: CYD dashboard (host)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: esp32
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install SDL2, libcurl, cJSON, Pillow
+        working-directory: .
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libsdl2-dev libcurl4-openssl-dev libcjson-dev python3-pil python3-numpy
+
+      # The real dashboard sources against stub ESP-IDF headers: the live-quote
+      # unit test, then the scripted preview session (AddressSanitizer on).
+      - name: Preview and quote tests
+        run: tools/dash_preview/run.sh
+
+      # The simulator's scripted tests (cards and taps, offline behaviour,
+      # touch calibration on a mis-mounted panel), sanitizers on.
+      - name: Simulator tests
+        env:
+          SIM_CFLAGS: -fsanitize=address,undefined
+        run: tools/dash_sim/test.sh
+
   simulator:
     name: UI simulator (${{ matrix.name }})
     runs-on: ${{ matrix.os }}

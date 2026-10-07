@@ -213,8 +213,12 @@ static void build_stocks(frame_t *f, const dash_store_t *st, int64_t now_us) {
     f->empty = n == 0;
     if (f->empty) {
         snprintf(f->empty_msg, sizeof(f->empty_msg), "Waiting for quotes");
+#if CONFIG_HOMEHUB_DASHBOARD_QUOTES
+        snprintf(f->empty_hint, sizeof(f->empty_hint), "Fetching from Nasdaq");
+#else
         snprintf(f->empty_hint, sizeof(f->empty_hint),
                  "Muse pushes them with dashboard.data");
+#endif
     }
     f->compact = n > STOCK_ROWS;
     for (int i = 0; i < n; i++) {

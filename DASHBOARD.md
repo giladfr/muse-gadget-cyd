@@ -30,7 +30,7 @@ itself back.
   Muse as a chat message, so Muse can ask and you answer with one tap.
 - **Over the air:** firmware (`device.ota`) and SD-card files (`sd.fetch`).
 
-Version: `esp32/version.txt` (1.4.0).
+Version: `esp32/version.txt` (1.4.1).
 
 ## Preview without a board
 
@@ -44,6 +44,37 @@ This compiles the real dashboard sources against stub ESP-IDF headers, plays
 a scripted session (data pushes, a swipe, taps, calibration, an update, an
 image), and renders every screen plus the animations. Run it after any UI
 change; `docs/dashboard/` holds the committed copies shown above.
+
+## Simulator: run the dashboard on your computer
+
+`tools/dash_sim` runs the real dashboard firmware (`main/dashboard/`) in a
+window. Only the chip layer is simulated: FreeRTOS tasks are threads, the
+mouse drives a simulated XPT2046 on the touch pins (so the real touch
+driver, gestures and calibration run), HTTP goes through libcurl (live
+Nasdaq quotes), NVS is a file, and chat sends to Muse are printed.
+
+```sh
+brew install sdl2 cjson            # macOS (Ubuntu: libsdl2-dev libcurl4-openssl-dev libcjson-dev)
+cd esp32
+tools/dash_sim/build.sh
+build-sim/dash_sim                 # click = touch, drag = swipe
+```
+
+Type the same commands Muse sends into its console, e.g.
+`dashboard.card {"json": {"id": "t", "title": "Test", "buttons": [{"id": "ok", "label": "OK"}], "show": true}}`,
+or `help` for the test commands (`tap`, `swipe`, `ldr` for the light sensor,
+`link off`, `chat fail`, `ota 40`, `image file.bmp`, `snap file.bmp`).
+Keys: arrows swipe, C calibrate, B/D bright/dark room, L link, S screenshot.
+`--swap-touch --invert-x --invert-y` emulate a panel mounted another way;
+`--slow-spi` paces drawing like the real 40 MHz bus.
+
+`tools/dash_sim/test.sh` runs the scripted tests in `tools/dash_sim/tests/`
+headless (cards and taps, offline behaviour, calibration); CI runs them, the
+preview and the quote test on every pull request.
+
+What it doesn't cover: the ESP32 itself (RAM limits, timing, Wi-Fi, TLS),
+the panel and SD card drivers, OTA, and the real Link session to Muse.
+Those still need the board (or a build in CI).
 
 ## Hardware (ESP32-2432S028R)
 

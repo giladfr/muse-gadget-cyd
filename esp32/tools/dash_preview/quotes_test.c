@@ -23,6 +23,7 @@ void dashboard_data_updated(void) { updated++; }
 // ---- fake HTTP: canned responses by URL, fed in random chunk sizes
 static http_event_handle_cb s_h; static void *s_ud; static char s_url[256]; static int s_status;
 static int s_requests;
+static bool s_offline;  // every request fails below HTTP
 static const char *QUOTE_NVDA = "{\"data\":{\"symbol\":\"NVDA\",\"companyName\":\"NVIDIA Corporation Common Stock\",\"marketStatus\":\"Open\",\"primaryData\":{\"lastSalePrice\":\"$123.45\",\"netChange\":\"-1.50\",\"percentageChange\":\"-1.20%\",\"bidPrice\":\"$123.40\",\"volume\":\"1,000,000\",\"isRealTime\":true}},\"message\":null,\"status\":{\"rCode\":200}}";
 static const char *QUOTE_SPY = "{\"data\":{\"symbol\":\"SPY\",\"marketStatus\":\"Open\",\"primaryData\":{\"lastSalePrice\":\"$671.02\",\"netChange\":\"UNCH\",\"percentageChange\":\"\"}},\"status\":{\"rCode\":200}}";
 static const char *QUOTE_AMD_CLOSED = "{\"data\":{\"marketStatus\":\"Closed\",\"primaryData\":{\"lastSalePrice\":\"$150.00\",\"netChange\":\"+2.00\",\"percentageChange\":\"+1.35%\"},\"secondaryData\":{\"lastSalePrice\":\"$151.00\",\"netChange\":\"+1.00\",\"percentageChange\":\"+0.67%\"}}}";
@@ -43,6 +44,7 @@ static void feed(const char *body) {
 }
 esp_err_t esp_http_client_perform(esp_http_client_handle_t c) {
     s_requests++;
+    if (s_offline) return -1;
     s_status = 200;
     const char *b = EMPTY;
     if (strstr(s_url, "/chart?")) b = CHART;
@@ -110,5 +112,15 @@ int main(void) {
     printf("second round requests: %d\n", s_requests - before);
     CHECK(s_requests - before == 3, "one request per known symbol, unknown XYZ skipped");
     char status[160]; dash_quotes_status(status, sizeof status); printf("%s\n", status);
+
+    // Network down: one failed request ends the round; nothing is marked
+    // unknown, and the next round is soon.
+    s_offline = true; before = s_requests; s_now = true; s_task = NULL;
+    dash_quotes_tick(true); s_task(NULL);
+    CHECK(s_requests - before == 1, "offline: one request, then stop (%d)", s_requests - before);
+    CHECK(s_syms[0].skip_until_ms == 0 && s_syms[1].skip_until_ms == 0 && s_syms[2].skip_until_ms == 0,
+          "offline: known symbols not parked");
+    CHECK(s_next_ms - now_ms() <= RETRY_S * 1000 && s_next_ms - now_ms() > 0, "offline: retry in 30 s");
+    s_offline = false;
     printf("ALL OK\n");
 }

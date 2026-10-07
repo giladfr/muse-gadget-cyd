@@ -1,0 +1,25 @@
+# A card with buttons; a tap reaches Muse as a chat turn and is queued.
+sleep 800
+dashboard.card {"json":{"id":"standup","title":"Standup","text":"Standup in 10 minutes. Join from here?","buttons":[{"id":"join","label":"Join","say":"Join my standup call."},{"id":"late","label":"Late"}],"show":true}}
+expect "ok":true
+sleep 700
+tap 80 202
+sleep 300
+dashboard.events {"peek":true}
+expect "message":"[Desk display] Join my standup call."
+expect "delivered":true
+tap 240 202
+sleep 300
+dashboard.events
+expect Tapped \"Late\" on \"Standup\"
+dashboard.events
+expect "events":[]
+dashboard.card {"json":{"id":"bad"}}
+expect "ok":true
+dashboard.card {"json":{"title":"no id"}}
+expect "ok":false
+dashboard.notify {"text":"Build fixed","level":"success"}
+expect "ok":true
+dashboard.debug
+expect acked=2
+quit

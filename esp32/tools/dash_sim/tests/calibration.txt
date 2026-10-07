@@ -1,0 +1,21 @@
+# Start with --swap-touch --invert-x: a panel mounted the other way round.
+# Taps land wrong until the 5 s hold + three-target calibration fixes them.
+sleep 800
+tap 100 50
+dashboard.debug
+expect last=(66,164)
+hold 160 120 5600
+sleep 500
+tap 30 60
+sleep 300
+tap 290 60
+sleep 300
+tap 30 200
+sleep 1800
+tap 100 50
+dashboard.debug
+expect last=(99,50)
+tap 250 180
+dashboard.debug
+expect last=(249,180)
+quit

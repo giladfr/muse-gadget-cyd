@@ -381,6 +381,7 @@ static void round_task(void *arg) {
     mkt_t phase = market_phase();
     int got = 0, closed_n = 0;
     bool blocked = false;
+    bool offline = false;  // a request failed below HTTP: no network
     if (rx && url && body && pts && arr) {
         rx->buf = body;
         rx->pts = pts;
@@ -403,17 +404,22 @@ static void round_task(void *arg) {
         }
     }
     int64_t now = now_ms();
-    for (int i = 0; c && i < s_n_syms && !blocked; i++) {
+    for (int i = 0; c && i < s_n_syms && !blocked && !offline; i++) {
         sym_t *s = &s_syms[i];
         if (now < s->skip_until_ms) continue;
         cJSON *q = cJSON_CreateObject();
         bool ok = false, closed = false;
         // The asset class that answered last time, else each in turn.
-        for (int k = 0; q && k < N_CLASSES && !ok && !blocked; k++) {
+        for (int k = 0; q && k < N_CLASSES && !ok && !blocked && !offline; k++) {
             int a = s->asset >= 0 ? s->asset : k;
             if (s->asset >= 0 && k > 0) break;
             int st = get(c, rx, url, s->symbol, "info", a, false);
-            if (st == 403 || st == 429) {
+            if (st < 0) {
+                // Wi-Fi or DNS down, or Nasdaq unreachable: says nothing about
+                // the symbol. End the round and try again soon.
+                ESP_LOGW(TAG, "network error; retrying in %d s", RETRY_S);
+                offline = true;
+            } else if (st == 403 || st == 429) {
                 ESP_LOGW(TAG, "Nasdaq refused (HTTP %d); backing off", st);
                 blocked = true;
             } else if (st == 200 && !rx->overflow) {
@@ -421,7 +427,7 @@ static void round_task(void *arg) {
                 if (ok) s->asset = (int8_t)a;
             }
         }
-        if (!ok && !blocked) {
+        if (!ok && !blocked && !offline) {
             if (s->asset >= 0) {
                 s->asset = -1;  // try every class next time
             } else {
@@ -451,6 +457,7 @@ static void round_task(void *arg) {
     }
     if (c) esp_http_client_cleanup(c);
     if (blocked) s_next_ms = now_ms() + BLOCKED_S * 1000;
+    if (offline) s_next_ms = now_ms() + RETRY_S * 1000;
     if (got) {
         s_all_closed = closed_n == got;
         double t = (double)time(NULL);
