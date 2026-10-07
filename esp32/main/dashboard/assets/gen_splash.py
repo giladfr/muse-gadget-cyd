@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Generate dash_splash_anim.c: Muse's mascot for the boot splash.
+
+Renders the firmware's own avatar (avatar/muse_pixel.c) through its boot pop
+and a happy cheer with splash_render.c, reduces the frames to 15 colours plus
+transparent, and stores each frame as a delta from the one before, so the
+board decodes them into one 2 KB buffer while the splash runs and frees it
+afterwards.
+
+    python3 main/dashboard/assets/gen_splash.py      (from esp32/)
+
+Stream format, per frame, for each of the 64 rows: a token count n (0 = row
+unchanged), then n tokens. A token is one byte, skip << 4 | count: leave
+`skip` pixels as they are, then set `count` pixels from the nibbles that
+follow (packed high nibble first, padded to a byte). Pixels after the last
+token are unchanged. Nibble 0 is transparent. The first frame is a delta from
+an all-transparent frame.
+"""
+import os
+import subprocess
+import sys
+import tempfile
+
+import numpy as np
+
+FPS = 12
+SECONDS = 2.9
+COLOURS = 15
+W = H = 64
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ESP32 = os.path.normpath(os.path.join(HERE, "../../.."))
+OUT = os.path.join(HERE, "..", "dash_splash_anim.c")
+
+
+def render():
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = os.path.join(tmp, "splash_render")
+        subprocess.check_call([
+            os.environ.get("CC", "cc"), "-O2", "-I", os.path.join(ESP32, "avatar"),
+            "-I", os.path.join(ESP32, "components/muse"),
+            os.path.join(HERE, "splash_render.c"),
+            os.path.join(ESP32, "avatar/muse_pixel.c"), "-lm", "-o", exe])
+        raw = subprocess.check_output([exe, str(FPS), str(SECONDS)])
+    return np.frombuffer(raw, dtype="<u2").reshape(-1, H, W)
+
+
+def rgb(v):
+    v = np.asarray(v, dtype=np.int64)
+    return np.stack([(v >> 11 & 31) * 255 // 31, (v >> 5 & 63) * 255 // 63,
+                     (v & 31) * 255 // 31], -1).astype(float)
+
+
+def palette(frames):
+    """15 colours by weighted k-means, seeded far apart (keeps the hearts)."""
+    vals, counts = np.unique(frames[frames != 0], return_counts=True)
+    pts = rgb(vals)
+    centres = [pts[counts.argmax()]]
+    while len(centres) < min(COLOURS, len(vals)):
+        d = np.min([((pts - c) ** 2).sum(1) for c in centres], 0)
+        centres.append(pts[d.argmax()])
+    centres = np.array(centres)
+    for _ in range(50):
+        lab = np.argmin([((pts - c) ** 2).sum(1) for c in centres], 0)
+        for k in range(len(centres)):
+            if (lab == k).any():
+                w = counts[lab == k][:, None]
+                centres[k] = (pts[lab == k] * w).sum(0) / w.sum()
+    lab = np.argmin([((pts - c) ** 2).sum(1) for c in centres], 0)
+    lut = {0: 0}
+    for v, k in zip(vals, lab):
+        lut[int(v)] = int(k) + 1
+    err = max(np.sqrt(((pts[i] - centres[lab[i]]) ** 2).sum()) for i in range(len(vals)))
+    return np.round(centres).astype(int), lut, err
+
+
+def encode(idx):
+    out, offsets = bytearray(), []
+    prev = np.zeros((H, W), np.uint8)
+    for f in idx:
+        offsets.append(len(out))
+        for y in range(H):
+            row, changed = f[y], f[y] != prev[y]
+            if not changed.any():
+                out.append(0)
+                continue
+            last = int(np.nonzero(changed)[0][-1])
+            toks, x = [], 0
+            while x <= last:
+                s = 0
+                while x <= last and not changed[x] and s < 15:
+                    s += 1
+                    x += 1
+                n = 0
+                while x <= last and changed[x] and n < 15:
+                    n += 1
+                    x += 1
+                # A long unchanged stretch: a token that only skips.
+                toks.append((s, row[x - n:x].tolist()))
+            out.append(len(toks))
+            for s, px in toks:
+                out.append(s << 4 | len(px))
+                for i in range(0, len(px), 2):
+                    out.append(px[i] << 4 | (px[i + 1] if i + 1 < len(px) else 0))
+        prev = f
+    return out, offsets
+
+
+def decode_check(data, offsets, idx):
+    fb = np.zeros((H, W), np.uint8)
+    for k, off in enumerate(offsets):
+        p = off
+        for y in range(H):
+            n = data[p]
+            p += 1
+            x = 0
+            for _ in range(n):
+                s, c = data[p] >> 4, data[p] & 15
+                p += 1
+                x += s
+                for i in range(c):
+                    b = data[p + i // 2]
+                    fb[y, x + i] = b >> 4 if i % 2 == 0 else b & 15
+                p += (c + 1) // 2
+                x += c
+        assert (fb == idx[k]).all(), "frame %d decodes wrong" % k
+
+
+def main():
+    frames = render()
+    pal, lut, err = palette(frames)
+    idx = np.vectorize(lut.get)(frames).astype(np.uint8)
+    data, offsets = encode(idx)
+    decode_check(data, offsets, idx)
+    lines = [
+        "// Copyright (c) Meta Platforms, Inc. and affiliates.",
+        "//",
+        "// Generated by assets/gen_splash.py from the Jollybot avatar",
+        "// (avatar/muse_pixel.c). Do not edit. Like the avatar, this artwork is",
+        "// not covered by the Apache License.",
+        '#include "dash_splash.h"',
+        "",
+        "const uint16_t dash_splash_palette[16] = {",
+        "    0,  // transparent",
+    ]
+    for r, g, b in pal:
+        lines.append("    DASH_RGB(%d, %d, %d)," % (r, g, b))
+    lines += ["};", "", "const uint32_t dash_splash_offsets[DASH_SPLASH_FRAMES] = {"]
+    for i in range(0, len(offsets), 8):
+        lines.append("    " + ", ".join(str(o) for o in offsets[i:i + 8]) + ",")
+    lines += ["};", "", "const uint8_t dash_splash_data[%d] = {" % len(data)]
+    for i in range(0, len(data), 16):
+        lines.append("    " + ", ".join("0x%02x" % b for b in data[i:i + 16]) + ",")
+    lines += ["};", ""]
+    with open(OUT, "w") as f:
+        f.write("\n".join(lines))
+    print("%d frames at %d fps, %d colours (max error %.0f), %d bytes -> %s"
+          % (len(idx), FPS, len(pal), err, len(data), os.path.relpath(OUT)))
+    hdr = os.path.join(HERE, "..", "dash_splash.h")
+    with open(hdr) as f:
+        text = f.read()
+    for name, val in (("DASH_SPLASH_FRAMES", len(idx)), ("DASH_SPLASH_FPS", FPS)):
+        if "#define %s %d\n" % (name, val) not in text:
+            sys.exit("update dash_splash.h: #define %s %d" % (name, val))
+
+
+if __name__ == "__main__":
+    main()

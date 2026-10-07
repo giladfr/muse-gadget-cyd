@@ -19,6 +19,7 @@
 #include "dash_clock.h"
 #include "dash_draw.h"
 #include "dash_icons.h"
+#include "dash_splash.h"
 #include "dash_store.h"
 #include "esp_timer.h"
 #include "sdkconfig.h"
@@ -52,6 +53,7 @@
 #define FLASH_LEVELS 5
 
 #define SCREEN_MESSAGE (-1)
+#define SCREEN_SPLASH (-2)
 // A banner takes the header's place while it shows.
 #define BANNER_H DASH_CONTENT_Y0
 // Card button bar.
@@ -135,6 +137,10 @@ typedef struct {
             char lines[CARD_TEXT_LINES][64];
             int n_lines;
         } card;
+        struct {
+            int ms;            // since the splash began
+            char version[24];  // "v1.5.4"
+        } splash;
         struct {
             char msg[48];
             char hint[48];
@@ -619,6 +625,16 @@ void dash_screen_prepare_message(const char *title, const char *msg,
     s_frame->u.message.progress = progress;
 }
 
+void dash_screen_prepare_splash(int ms, const char *version) {
+    begin_frame(SCREEN_SPLASH, "");
+    s_frame->valid = false;  // the first dashboard frame repaints everything
+    s_animating = false;
+    s_frame->u.splash.ms = ms;
+    snprintf(s_frame->u.splash.version, sizeof(s_frame->u.splash.version), "%s",
+             version ? version : "");
+    dash_splash_seek(ms * DASH_SPLASH_FPS / 1000);
+}
+
 // ---- drawing --------------------------------------------------------------
 
 static void draw_status(uint16_t *buf, int sy0, int sh, const frame_t *f) {
@@ -1067,11 +1083,56 @@ bool dash_screen_banner(dash_banner_t *out) {
     return true;
 }
 
+static float clamp01(float v) {
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+// Boot splash: the mascot pops up and cheers, "Muse Dashboard" rises in under
+// it, then the version, and three dots pulse while the Link comes up.
+#define SPLASH_AV_Y (-12)
+#define SPLASH_TITLE_Y 170
+static void draw_splash(uint16_t *buf, int sy0, int sh, const frame_t *f) {
+    const int ms = f->u.splash.ms;
+    dash_splash_draw(buf, sy0, sh, (DASH_W - DASH_SPLASH_SIZE) / 2, SPLASH_AV_Y);
+    // Title: fades in and rises 10 px (ease out) from 0.8 s.
+    float a = clamp01((ms - 800) / 500.0f);
+    if (a > 0) {
+        float e = 1 - (1 - a) * (1 - a) * (1 - a);
+        int y = SPLASH_TITLE_Y + (int)((1 - e) * 10);
+        const char *w1 = "Muse", *w2 = " Dashboard";
+        int w = dash_text_w(F_LARGE, w1) + dash_text_w(F_LARGE, w2);
+        int x = (DASH_W - w) / 2;
+        int alpha = (int)(e * 255);
+        x += dash_text(buf, sy0, sh, F_LARGE, x, y, w1,
+                       dash_mix(DASH_BG, DASH_ACCENT, alpha));
+        dash_text(buf, sy0, sh, F_LARGE, x, y, w2, dash_mix(DASH_BG, DASH_TEXT, alpha));
+    }
+    float v = clamp01((ms - 1300) / 500.0f);
+    if (v > 0 && f->u.splash.version[0]) {
+        dash_text_c(buf, sy0, sh, F_SMALL, 0, DASH_W, SPLASH_TITLE_Y + 29,
+                    f->u.splash.version, dash_mix(DASH_BG, DASH_TEXT3, (int)(v * 255)));
+    }
+    // Loading dots, a wave running left to right.
+    float d = clamp01((ms - 1500) / 400.0f);
+    if (d > 0 && sy0 < 236 && sy0 + sh > 222) {
+        for (int i = 0; i < 3; i++) {
+            float ph = sinf((ms / 1000.0f) * 7.0f - i * 0.9f) * 0.5f + 0.5f;
+            uint16_t c = dash_mix(DASH_TEXT3, DASH_ACCENT, (int)(ph * 255));
+            dash_circle(buf, sy0, sh, DASH_W / 2.0f + (i - 1) * 14, 229 - ph * 2,
+                        2.2f + ph * 1.0f, dash_mix(DASH_BG, c, (int)(d * 255)));
+        }
+    }
+}
+
 static void draw_frame(const frame_t *f, uint16_t *buf, int sy0, int sh) {
     for (int i = 0; i < DASH_W * sh; i++) buf[i] = DASH_BG;
     draw_top(buf, sy0, sh, f);
     if (f->screen == SCREEN_MESSAGE) {
         draw_message_screen(buf, sy0, sh, f);
+        return;
+    }
+    if (f->screen == SCREEN_SPLASH) {
+        draw_splash(buf, sy0, sh, f);
         return;
     }
     if (sy0 + sh > CONTENT_Y && sy0 < DASH_CONTENT_Y1) {

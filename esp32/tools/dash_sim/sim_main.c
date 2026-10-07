@@ -13,6 +13,7 @@
  *   tap X Y | swipe left|right | hold X Y MS | sleep MS
  *   ldr RAW | link on|off | wifi RSSI|off | chat ok|fail
  *   ota PCT|fail | image FILE.bmp | snap FILE.bmp | help | quit
+ *   record MS PREFIX   (a screenshot every 40 ms: PREFIX_000.bmp, ...)
  *   expect TEXT   (scripts: fail the run unless the last output contains TEXT)
  *
  * Connected to a real Muse (tools/dash_sim/mac_gadget.sh): --listen takes
@@ -209,7 +210,7 @@ static void help(void) {
            "  display.show_animation, each followed by JSON params.\n"
            "Test commands: tap X Y | swipe left|right | hold X Y MS | sleep MS |\n"
            "  ldr RAW | link on|off | wifi RSSI|off | chat ok|fail | ota PCT|fail |\n"
-           "  image FILE.bmp | snap FILE.bmp | expect TEXT | quit\n");
+           "  image FILE.bmp | snap FILE.bmp | record MS PREFIX | expect TEXT | quit\n");
 }
 
 static void run_line(char *line) {
@@ -253,6 +254,16 @@ static void run_line(char *line) {
         if (!pass) s_failures++;
         printf("%s: expect \"%s\"%s%s\n", pass ? "PASS" : "FAIL", rest,
                pass ? "" : " in: ", pass ? "" : s_last);
+    } else if (!strcmp(cmd, "record") && sscanf(rest, "%d %200s", &a, word) == 2) {
+        // Frames as the panel shows them, e.g. for a GIF of an animation.
+        int n = 0;
+        for (int t = 0; t < a; t += 40, n++) {
+            char path[280];
+            snprintf(path, sizeof(path), "%.200s_%03d.bmp", word, n % 1000);
+            snap(path);
+            usleep(40000);
+        }
+        printf("recorded %d frames\n", n);
     } else if (!strcmp(cmd, "snap") && sscanf(rest, "%255s", word) == 1) {
         usleep(150000);  // let the frame in progress land
         printf("%s %s\n", snap(word) ? "saved" : "can't write", word);

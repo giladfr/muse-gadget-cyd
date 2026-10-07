@@ -25,6 +25,7 @@
 #include "dash_net.h"
 #include "dash_quotes.h"
 #include "dash_screens.h"
+#include "dash_splash.h"
 #include "dash_store.h"
 #include "dash_touch.h"
 #include "esp_heap_caps.h"
@@ -52,6 +53,8 @@ typedef enum {
 // that changed are repainted. The clock screen ticks every second, on the
 // second, for its second hand.
 #define HEADER_REFRESH_MS 5000
+// Boot splash: the animation plus a short hold on its last frame.
+#define SPLASH_ANIM_MS (DASH_SPLASH_FRAMES * 1000 / DASH_SPLASH_FPS + 500)
 // Land this far past the second, so the frame reads the new second.
 #define CLOCK_TICK_SLACK_MS 15
 // Wake-up fallback while idle: covers a lost pen-down interrupt. Without the
@@ -74,7 +77,9 @@ static int s_screen = DASH_SCREEN_STOCKS;  // or DASH_SCREEN_COUNT + card
 static int s_slide = 0;          // pending screen change: -1 / +1
 static bool s_paired = false;
 static bool s_link = false;
-static int64_t s_splash_until = 0;  // version splash until this now_ms()
+static int64_t s_splash_until = 0;  // boot splash until this now_ms()
+static int64_t s_splash_t0;         // when it began
+static bool s_splash_anim;          // the mascot animation is running
 static int64_t s_next_tick_ms = 0;  // next header/clock refresh (renderer only)
 static bool s_full = false;      // repaint the whole screen
 static bool s_changed = false;   // data changed: diff and repaint those rows
@@ -424,9 +429,12 @@ static void dash_task(void *arg) {
             if (!paired) continue;
             activate();
             active = true;
-            // Show version splash for 2.5 seconds on boot.
-            s_splash_until = now_ms() + 2500;
-            s_next_tick_ms = s_splash_until;  // wake to end it
+            // Boot splash: the mascot animation (2 KB while it runs), then a
+            // short hold; just the title and version without the RAM.
+            s_splash_anim = dash_splash_begin();
+            s_splash_t0 = now_ms();
+            s_splash_until = s_splash_t0 + (s_splash_anim ? SPLASH_ANIM_MS : 2500);
+            s_next_tick_ms = s_splash_t0;
         }
 
         dash_backlight_update();
@@ -510,12 +518,20 @@ static void dash_task(void *arg) {
         // The splash just ended: the first dashboard frame repaints it all.
         if (s_splash_until && now >= s_splash_until) {
             s_splash_until = 0;
+            if (s_splash_anim) dash_splash_end();
+            s_splash_anim = false;
             full = true;
+            s_next_tick_ms = now;
         }
+        if (s_splash_until) slide = 0;  // a swipe during the splash just lands
         bool tick = now >= s_next_tick_ms;
         bool anim = dash_screen_animating();
         if (!(full || need_full || changed || tick || slide || anim)) continue;
-        if (tick || slide) {
+        if (s_splash_until) {
+            // Next animation frame (or the end of the hold).
+            int64_t next = now + 1000 / DASH_SPLASH_FPS;
+            s_next_tick_ms = next < s_splash_until ? next : s_splash_until;
+        } else if (tick || slide) {
             s_next_tick_ms = sc == DASH_SCREEN_CLOCK && dash_clock_valid()
                                  ? now + ms_to_next_second() + CLOCK_TICK_SLACK_MS
                                  : now + HEADER_REFRESH_MS;
@@ -526,13 +542,16 @@ static void dash_task(void *arg) {
         xSemaphoreTake(s_render_lock, portMAX_DELAY);
         int y0, y1;
         bool repaint = full || need_full;
-        // Boot splash: show version for 2.5s after activation.
         if (s_splash_until) {
             const esp_app_desc_t *desc = esp_app_get_description();
             char ver[40];
             snprintf(ver, sizeof(ver), "v%s", desc->version);
-            dash_screen_prepare_message("Muse Dashboard", ver, "Starting...",
-                                        -1, -1, -1);
+            if (s_splash_anim) {
+                dash_screen_prepare_splash((int)(now - s_splash_t0), ver);
+            } else {
+                dash_screen_prepare_message("Muse Dashboard", ver, "Starting...",
+                                            -1, -1, -1);
+            }
             y0 = 0; y1 = DASH_H;
         } else {
             dash_screen_prepare(sc, &status, repaint || slide, &y0, &y1);

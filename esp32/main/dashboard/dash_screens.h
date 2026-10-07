@@ -74,6 +74,10 @@ void dash_screen_prepare_message(const char *title, const char *msg,
                                  const char *hint, int cx, int cy,
                                  int progress);
 
+// The boot splash, `ms` into its animation (dash_splash_begin() first), with
+// the firmware version under the title.
+void dash_screen_prepare_splash(int ms, const char *version);
+
 // Render one strip (screen rows [sy0, sy0+sh)) of the prepared frame, or of
 // the one before it (the outgoing screen of a slide transition).
 void dash_screen_draw_strip(uint16_t *buf, int sy0, int sh);

@@ -54,6 +54,8 @@ set(DASHBOARD_SRCS
     "dashboard/dash_quotes.c"
     "dashboard/dash_cards.c"
     "dashboard/dash_events.c"
+    "dashboard/dash_splash.c"
+    "dashboard/dash_splash_anim.c"
 )
 
 set(GADGET_REQUIRES

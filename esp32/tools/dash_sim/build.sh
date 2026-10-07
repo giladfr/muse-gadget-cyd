@@ -28,11 +28,14 @@ done
 
 SRCS=(dashboard.c dash_draw.c dash_screens.c dash_store.c dash_touch.c dash_net.c
       dash_clock.c dash_backlight.c dash_icons.c dash_assets.c dash_quotes.c
-      dash_cards.c dash_events.c)
+      dash_cards.c dash_events.c dash_splash.c
+      dash_splash_anim.c)
 
 # Simulator stubs first (FreeRTOS on threads, the real clock), then the
 # preview's ESP-IDF header stubs; cJSON before them (the real one).
+VERSION="$(cat "$HERE/../../version.txt" 2>/dev/null || echo host)"
 ${CC:-cc} -std=gnu11 -O1 -g ${SIM_CFLAGS:-} -Wall -Wno-unused-parameter \
+    -DDASH_HOST_VERSION="\"$VERSION\"" \
     -I"$HERE" -I"$HERE/stubs" $CJSON_CFLAGS -I"$HERE/../dash_preview/stubs" \
     -I"$MAIN" -I"$MAIN/dashboard" $(sdl2-config --cflags) $(curl-config --cflags) \
     -include "$HERE/stubs/sdkconfig.h" \

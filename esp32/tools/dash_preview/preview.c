@@ -199,7 +199,9 @@ int main(void) {
     dashboard_init();
     dashboard_set_link(true);
     dashboard_set_paired(true);
-    settle(300);
+    settle(2600);
+    snap("splash");
+    settle(1200);  // the 3.4 s boot splash ends
     snap("stocks_empty");
 
     static const char *const sym[] = {"AMD", "NVDA", "AAPL", "MSFT", "SPY", "QQQ", "TSLA", "META"};

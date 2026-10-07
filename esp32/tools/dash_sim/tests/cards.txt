@@ -1,6 +1,6 @@
 # A card with buttons; a tap reaches Muse as a chat turn and is queued.
-# Past the 2.5 s version splash, which ignores taps.
-sleep 3000
+# Past the 3.4 s boot splash, which ignores taps.
+sleep 4000
 dashboard.card {"json":{"id":"standup","title":"Standup","text":"Standup in 10 minutes. Join from here?","buttons":[{"id":"join","label":"Join","say":"Join my standup call."},{"id":"late","label":"Late"}],"show":true}}
 expect "ok":true
 sleep 700

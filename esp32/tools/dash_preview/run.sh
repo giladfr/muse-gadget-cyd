@@ -14,8 +14,11 @@ mkdir -p "$OUT/raw"
 rm -f "$OUT"/raw/*.raw
 SRCS=(dashboard.c dash_draw.c dash_screens.c dash_store.c dash_touch.c
       dash_net.c dash_clock.c dash_backlight.c dash_icons.c dash_assets.c
-      dash_quotes.c dash_cards.c dash_events.c)
+      dash_quotes.c dash_cards.c dash_events.c dash_splash.c
+      dash_splash_anim.c)
+VERSION="$(cat "$HERE/../../version.txt" 2>/dev/null || echo host)"
 ${CC:-cc} -std=gnu11 -O1 -g ${PREVIEW_CFLAGS:--fsanitize=address,undefined} \
+    -DDASH_HOST_VERSION="\"$VERSION\"" \
     -Wall -Wno-unused-parameter -Wno-unused-function \
     -I"$HERE/stubs" -I"$MAIN" -I"$MAIN/dashboard" \
     -include "$HERE/stubs/sdkconfig.h" -include "$HERE/stubs/fake_time.h" \

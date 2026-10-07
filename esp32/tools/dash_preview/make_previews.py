@@ -10,7 +10,7 @@ import numpy as np
 from PIL import Image
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "out"
-SCREENS = ["stocks", "weather", "calendar", "clock", "stocks_compact", "calendar_compact",
+SCREENS = ["splash", "stocks", "weather", "calendar", "clock", "stocks_compact", "calendar_compact",
            "stocks_empty", "card_question", "card_tapped", "card_rows",
            "banner", "update", "calibrate", "takeover"]
 

@@ -31,7 +31,7 @@ itself back.
   Muse as a chat message, so Muse can ask and you answer with one tap.
 - **Over the air:** firmware (`device.ota`) and SD-card files (`sd.fetch`).
 
-Version: `esp32/version.txt` (1.5.4).
+Version: `esp32/version.txt` (1.5.5).
 
 ## Preview without a board
 
@@ -151,6 +151,31 @@ board online:
   instead of at boot.
 - **v1.4.5 — Night backlight 5% → 25%.** At 5% the quadratic brightness curve
   gives a PWM duty of ~2/1023 — essentially black.
+
+## Boot splash (v1.5.5)
+
+![Boot splash](docs/dashboard/splash.gif)
+
+Muse's mascot pops up from a squash, opens its eyes and cheers with hearts.
+"Muse Dashboard" rises in under it, then the version, and three dots pulse
+while the Link comes up. It runs 3.4 s; taps during it are ignored.
+
+- **Frames:** pre-rendered at build time from the firmware's own avatar
+  renderer (`avatar/muse_pixel.c`) by
+  `main/dashboard/assets/gen_splash.py`. Running that renderer live would
+  cost ~12 KB of RAM permanently. There are 35 frames at 12 fps, 64×64 in
+  15 colours plus transparent, each stored as a delta from the previous one.
+  That's 18.9 KB of flash (`dash_splash_anim.c`), drawn at 3×.
+- **RAM:** one 2 KB 4-bit frame buffer, allocated when the splash starts and
+  freed when it ends. Without it, the old static title and version splash is
+  shown instead. Decoding goes straight into the existing strip buffers.
+  `dash_splash.c` is ~1 KB of code and 12 bytes of static RAM.
+- **Regenerate:** `python3 main/dashboard/assets/gen_splash.py` (from
+  `esp32/`, needs a C compiler and numpy). It decodes every frame back to
+  check it. Like the avatar, the artwork isn't covered by the Apache
+  License.
+- **Watch it:** in the simulator (`build-sim/dash_sim`), or record it with
+  `record 4400 frame` in its console (a BMP every 40 ms).
 
 ## Clock screen (v1.5.0–v1.5.4)
 
