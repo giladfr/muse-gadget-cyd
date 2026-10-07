@@ -70,9 +70,13 @@ For persistent alerts, use a card instead.
 - Weather: run `bridge/fetch.py` from the gadget's repo and push its output with
   `dashboard.data {"screen": "bridge", "json": "<output as a JSON string>"}`. Stocks in it are ignored while the
   board fetches its own quotes.
-- Calendar: `dashboard.data {"screen": "calendar", "json": "{\"label\":\"Tuesday, Oct 6\",\"events\":[{\"time\":\"5:45 PM\",\"title\":\"...\"}]}"}`.
-  Push in the morning and when it changes. The `json` parameter must be a string.
+- Calendar: push today's events with `dashboard.data {"screen": "calendar", "json": "{\"label\":\"Tuesday, Oct 6\",\"events\":[{\"time\":\"5:45 PM\",\"title\":\"...\"}]}"}`,
+  and tomorrow's with `"day":"tomorrow"` added: `{\"day\":\"tomorrow\",\"label\":\"Wednesday, Oct 7\",\"events\":[...]}`.
+  The board shows them on separate Today/Tomorrow screens. Push in the morning and when it changes.
+  The `json` parameter must be a string.
 - Watchlist: `dashboard.stocks {"symbols": "AMD,NVDA,SPY"}` (up to 8).
+- Clock: the board shows an analog clock (local time) plus Israel digital time automatically once
+  the clock is set (SNTP). No data push needed.
 
 ### Images
 

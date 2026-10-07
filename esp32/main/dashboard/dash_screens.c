@@ -120,6 +120,14 @@ typedef struct {
             int n;
         } cal;
         struct {
+            int hour;      // 0-23 local
+            int minute;    // 0-59 local
+            int second;    // 0-59 local
+            char date[24]; // "Tuesday, Oct 6"
+            char israel[16]; // "14:30" Israel time
+            bool valid;
+        } clock;
+        struct {
             dash_card_t c;
             char lines[CARD_TEXT_LINES][64];
             int n_lines;
@@ -150,6 +158,8 @@ const char *dash_screen_name(dash_screen_t s) {
         case DASH_SCREEN_STOCKS: return "Stocks";
         case DASH_SCREEN_WEATHER: return "Weather";
         case DASH_SCREEN_CALENDAR: return "Today";
+        case DASH_SCREEN_CALENDAR_TOM: return "Tomorrow";
+        case DASH_SCREEN_CLOCK: return "Clock";
         default: return "";
     }
 }
@@ -307,10 +317,15 @@ static int event_title_x(bool compact) {
     return compact ? MARGIN + 78 : MARGIN + 14;
 }
 
-static void build_calendar(frame_t *f, const dash_store_t *st) {
-    set_sub(f, st->events_label);
-    int n = st->n_events < MAX_ROWS ? st->n_events : MAX_ROWS;
-    int total = st->n_events_total > n ? st->n_events_total : n;
+static void build_calendar(frame_t *f, const dash_store_t *st, bool tomorrow) {
+    const dash_event_t *events = tomorrow ? st->events_tomorrow : st->events;
+    int n_events = tomorrow ? st->n_events_tomorrow : st->n_events;
+    int n_total = tomorrow ? st->n_events_tomorrow_total : st->n_events_total;
+    const char *label = tomorrow ? st->events_tomorrow_label : st->events_label;
+    int ev_day = tomorrow ? st->events_tomorrow_day : st->events_day;
+    set_sub(f, label);
+    int n = n_events < MAX_ROWS ? n_events : MAX_ROWS;
+    int total = n_total > n ? n_total : n;
     f->empty = n == 0;
     if (f->empty) {
         snprintf(f->empty_msg, sizeof(f->empty_msg), "Nothing scheduled");
@@ -321,20 +336,25 @@ static void build_calendar(frame_t *f, const dash_store_t *st) {
     int shown = total > n ? n - 1 : n;
 
     // Past/next only for a calendar pushed today, with the clock set.
+    // (Tomorrow's events are all in the future.)
     struct tm tm;
     int now_min = -1;
-    if (dash_clock_local(&tm)
-        && st->events_day == tm.tm_year * 1000 + tm.tm_yday) {
+    if (!tomorrow && dash_clock_local(&tm)
+        && ev_day == tm.tm_year * 1000 + tm.tm_yday) {
         now_min = tm.tm_hour * 60 + tm.tm_min;
     }
     bool next_found = false;
     int title_w = DASH_W - MARGIN - 10 - event_title_x(f->compact);
     for (int i = 0; i < shown; i++) {
         event_row_t *r = &f->u.cal.rows[i];
-        snprintf(r->time, sizeof(r->time), "%s", st->events[i].time);
-        dash_text_fit(F_BODY, r->title, sizeof(r->title), st->events[i].title,
+        // events[i].time is char[16], r->time is char[12]; copy safely.
+        size_t copy_n = sizeof(r->time) - 1;
+        if (copy_n > sizeof(events[i].time) - 1) copy_n = sizeof(events[i].time) - 1;
+        memcpy(r->time, events[i].time, copy_n);
+        r->time[copy_n] = '\0';
+        dash_text_fit(F_BODY, r->title, sizeof(r->title), events[i].title,
                       title_w);
-        int m = parse_minutes(st->events[i].time);
+        int m = parse_minutes(events[i].time);
         if (now_min >= 0 && m >= 0) {
             // Without an end time, an event counts as over 30 min in.
             if (m + 30 <= now_min) {
@@ -352,6 +372,39 @@ static void build_calendar(frame_t *f, const dash_store_t *st) {
         shown++;
     }
     f->u.cal.n = shown;
+}
+
+static void build_clock(frame_t *f) {
+    struct tm tm;
+    struct tm il;
+    f->u.clock.valid = false;
+    if (!dash_clock_local(&tm)) {
+        snprintf(f->empty_msg, sizeof(f->empty_msg), "Clock not set");
+        f->empty = true;
+        return;
+    }
+    f->empty = false;
+    f->u.clock.valid = true;
+    f->u.clock.hour = tm.tm_hour;
+    f->u.clock.minute = tm.tm_min;
+    f->u.clock.second = tm.tm_sec;
+    // Date: "Tuesday, Oct 6"
+    static const char *days[] = {"Sunday","Monday","Tuesday","Wednesday",
+                                  "Thursday","Friday","Saturday"};
+    static const char *months[] = {"Jan","Feb","Mar","Apr","May","Jun",
+                                    "Jul","Aug","Sep","Oct","Nov","Dec"};
+    snprintf(f->u.clock.date, sizeof(f->u.clock.date), "%s, %s %d",
+             days[tm.tm_wday % 7], months[tm.tm_mon % 12], tm.tm_mday);
+    // Israel time
+    if (dash_clock_israel(&il)) {
+        snprintf(f->u.clock.israel, sizeof(f->u.clock.israel), "%02d:%02d",
+                 il.tm_hour, il.tm_min);
+    } else {
+        snprintf(f->u.clock.israel, sizeof(f->u.clock.israel), "--:--");
+    }
+    // Animate: redraw every second for the second hand.
+    s_animating = true;
+    set_sub(f, f->u.clock.date);
 }
 
 // Word-wrap `text` into up to CARD_TEXT_LINES lines of at most max_w pixels;
@@ -481,7 +534,9 @@ void dash_screen_prepare(int s, const dash_status_t *st, bool full, int *y0,
             build_stocks(s_frame, &s_snap, esp_timer_get_time());
             break;
         case DASH_SCREEN_WEATHER: build_weather(s_frame, &s_snap); break;
-        case DASH_SCREEN_CALENDAR: build_calendar(s_frame, &s_snap); break;
+        case DASH_SCREEN_CALENDAR: build_calendar(s_frame, &s_snap, false); break;
+        case DASH_SCREEN_CALENDAR_TOM: build_calendar(s_frame, &s_snap, true); break;
+        case DASH_SCREEN_CLOCK: build_clock(s_frame); break;
         default: build_card(s_frame, s - DASH_SCREEN_COUNT); break;
     }
     s_frame->has_banner = dash_banner_current(&s_frame->banner);
@@ -506,9 +561,12 @@ void dash_screen_prepare(int s, const dash_status_t *st, bool full, int *y0,
         diff_rows(y0, y1, s_prev->u.stocks.n, s_frame->u.stocks.n,
                   s_prev->u.stocks.rows, s_frame->u.stocks.rows,
                   sizeof(stock_row_t));
-    } else if (s == DASH_SCREEN_CALENDAR) {
+    } else if (s == DASH_SCREEN_CALENDAR || s == DASH_SCREEN_CALENDAR_TOM) {
         diff_rows(y0, y1, s_prev->u.cal.n, s_frame->u.cal.n,
                   s_prev->u.cal.rows, s_frame->u.cal.rows, sizeof(event_row_t));
+    } else if (s == DASH_SCREEN_CLOCK) {
+        // Clock animates every second; always redraw the content area.
+        mark(y0, y1, CONTENT_Y, DASH_CONTENT_Y1);
     } else if (memcmp(&s_prev->u, &s_frame->u, sizeof(s_frame->u)) != 0) {
         mark(y0, y1, CONTENT_Y, DASH_CONTENT_Y1);
     }
@@ -697,6 +755,52 @@ static void draw_weather(uint16_t *buf, int sy0, int sh, const frame_t *f) {
         dash_text(buf, sy0, sh, F_SMALL, tx + hw + 4, cy0 + 52,
                   f->u.weather.lo[i], DASH_TEXT3);
     }
+}
+
+static void draw_clock(uint16_t *buf, int sy0, int sh, const frame_t *f) {
+    if (!f->u.clock.valid) {
+        draw_empty(buf, sy0, sh, f);
+        return;
+    }
+    // Analog clock centered in the content area.
+    float cx = DASH_W / 2.0f;
+    float cy = (DASH_CONTENT_Y0 + DASH_CONTENT_Y1) / 2.0f - 10;
+    float r = 68.0f;
+    // Face
+    dash_circle(buf, sy0, sh, cx, cy, r, DASH_WHITE);
+    // 12 hour ticks
+    for (int i = 0; i < 12; i++) {
+        float a = i * 30.0f * 3.14159265f / 180.0f;
+        float r1 = (i % 3 == 0) ? r - 10 : r - 6;
+        float x0 = cx + r1 * sinf(a), y0 = cy - r1 * cosf(a);
+        float x1 = cx + (r - 2) * sinf(a), y1 = cy - (r - 2) * cosf(a);
+        dash_line(buf, sy0, sh, x0, y0, x1, y1, DASH_WHITE, i % 3 == 0 ? 3 : 2);
+    }
+    // Hands (angles from 12 o'clock, clockwise)
+    float hr_a = ((f->u.clock.hour % 12) + f->u.clock.minute / 60.0f) * 30.0f
+                 * 3.14159265f / 180.0f;
+    float min_a = (f->u.clock.minute + f->u.clock.second / 60.0f) * 6.0f
+                  * 3.14159265f / 180.0f;
+    float sec_a = f->u.clock.second * 6.0f * 3.14159265f / 180.0f;
+    // Hour hand
+    dash_line(buf, sy0, sh, cx, cy,
+              cx + (r - 28) * sinf(hr_a), cy - (r - 28) * cosf(hr_a),
+              DASH_WHITE, 4);
+    // Minute hand
+    dash_line(buf, sy0, sh, cx, cy,
+              cx + (r - 14) * sinf(min_a), cy - (r - 14) * cosf(min_a),
+              DASH_WHITE, 3);
+    // Second hand (red)
+    dash_line(buf, sy0, sh, cx, cy,
+              cx + (r - 8) * sinf(sec_a), cy - (r - 8) * cosf(sec_a),
+              DASH_DOWN, 2);
+    // Center dot
+    dash_circle(buf, sy0, sh, cx, cy, 3, DASH_WHITE);
+    // Israel digital time below the clock
+    char israel_line[32];
+    snprintf(israel_line, sizeof(israel_line), "Israel %s", f->u.clock.israel);
+    dash_text_c(buf, sy0, sh, F_BODY, 0, DASH_W, (int)(cy + r + 8),
+                israel_line, DASH_TEXT2);
 }
 
 static void draw_calendar(uint16_t *buf, int sy0, int sh, const frame_t *f) {
@@ -947,7 +1051,9 @@ static void draw_frame(const frame_t *f, uint16_t *buf, int sy0, int sh) {
         switch (f->screen) {
             case DASH_SCREEN_STOCKS: draw_stocks(buf, sy0, sh, f); break;
             case DASH_SCREEN_WEATHER: draw_weather(buf, sy0, sh, f); break;
-            case DASH_SCREEN_CALENDAR: draw_calendar(buf, sy0, sh, f); break;
+            case DASH_SCREEN_CALENDAR:
+            case DASH_SCREEN_CALENDAR_TOM: draw_calendar(buf, sy0, sh, f); break;
+            case DASH_SCREEN_CLOCK: draw_clock(buf, sy0, sh, f); break;
             default: draw_card(buf, sy0, sh, f); break;
         }
     }

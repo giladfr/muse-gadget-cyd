@@ -53,6 +53,33 @@ bool dash_clock_local(struct tm *out) {
     return true;
 }
 
+// Israel: IST (UTC+2), IDT (UTC+3) during daylight saving.
+// DST: starts Friday before last Sunday in March, ends last Sunday in October.
+#define TZ_ISRAEL "IST-2IDT,M3.4.4/26,M10.5.0"
+
+bool dash_clock_israel(struct tm *out) {
+    time_t now = time(NULL);
+    if (now <= VALID_AFTER) return false;
+    tz_once();
+    // Save current TZ, switch to Israel, convert, restore.
+    const char *old_tz = getenv("TZ");
+    char old_buf[64];
+    if (old_tz) {
+        strncpy(old_buf, old_tz, sizeof(old_buf) - 1);
+        old_buf[sizeof(old_buf) - 1] = '\0';
+    }
+    setenv("TZ", TZ_ISRAEL, 1);
+    tzset();
+    localtime_r(&now, out);
+    if (old_tz) {
+        setenv("TZ", old_buf, 1);
+    } else {
+        unsetenv("TZ");
+    }
+    tzset();
+    return true;
+}
+
 void dash_clock_seed(int64_t unix_s) {
     if (unix_s <= VALID_AFTER || dash_clock_valid()) return;
     struct timeval tv = {.tv_sec = (time_t)unix_s, .tv_usec = 0};

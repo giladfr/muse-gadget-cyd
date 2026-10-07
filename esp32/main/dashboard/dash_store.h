@@ -73,6 +73,12 @@ typedef struct {
     // Local date of the calendar push as year * 1000 + day of year, or -1 if
     // the clock was not set: events count as "today's" only on that date.
     int events_day;
+    // Tomorrow's events (same layout as today's).
+    dash_event_t events_tomorrow[DASH_MAX_EVENTS];
+    int n_events_tomorrow;
+    int n_events_tomorrow_total;
+    char events_tomorrow_label[32];  // e.g. "Wednesday, Oct 7"
+    int events_tomorrow_day;
     // Quote freshness: how old the quotes already were when they arrived
     // (bridge `now` - `stocks_updated`), and when they arrived
     // (esp_timer_get_time()). stocks_rx_us == 0 means no quotes yet.

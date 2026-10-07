@@ -220,27 +220,38 @@ bool dash_store_set_calendar(const cJSON *root) {
         ESP_LOGW(TAG, "calendar data is not a JSON object");
         return false;
     }
+    // "day": "tomorrow" stores in tomorrow's slots; anything else (or missing)
+    // stores in today's.
+    const cJSON *day = cJSON_GetObjectItemCaseSensitive(root, "day");
+    bool is_tomorrow = cJSON_IsString(day) && strcmp(day->valuestring, "tomorrow") == 0;
     struct tm tm;
-    int day = dash_clock_local(&tm) ? tm.tm_year * 1000 + tm.tm_yday : -1;
+    int day_id = dash_clock_local(&tm) ? tm.tm_year * 1000 + tm.tm_yday : -1;
+    if (is_tomorrow && day_id >= 0) day_id++;  // tomorrow's date id
     dash_store_t *s = store_lock();
-    copy_str(s->events_label, sizeof(s->events_label), root, "label");
-    s->n_events = 0;
-    s->n_events_total = 0;
-    s->events_day = day;
+    dash_event_t *events = is_tomorrow ? s->events_tomorrow : s->events;
+    int *n_events = is_tomorrow ? &s->n_events_tomorrow : &s->n_events;
+    int *n_total = is_tomorrow ? &s->n_events_tomorrow_total : &s->n_events_total;
+    char *label = is_tomorrow ? s->events_tomorrow_label : s->events_label;
+    size_t label_n = is_tomorrow ? sizeof(s->events_tomorrow_label) : sizeof(s->events_label);
+    int *ev_day = is_tomorrow ? &s->events_tomorrow_day : &s->events_day;
+    copy_str(label, label_n, root, "label");
+    *n_events = 0;
+    *n_total = 0;
+    *ev_day = day_id;
     const cJSON *evs = cJSON_GetObjectItemCaseSensitive(root, "events");
     const cJSON *it = NULL;
     cJSON_ArrayForEach(it, evs) {
         const cJSON *title = cJSON_GetObjectItemCaseSensitive(it, "title");
         if (!cJSON_IsString(title) || !title->valuestring[0]) continue;
-        s->n_events_total++;
-        if (s->n_events >= DASH_MAX_EVENTS) continue;
-        dash_event_t *e = &s->events[s->n_events++];
+        (*n_total)++;
+        if (*n_events >= DASH_MAX_EVENTS) continue;
+        dash_event_t *e = &events[(*n_events)++];
         copy_str(e->time, sizeof(e->time), it, "time");
         copy_str(e->title, sizeof(e->title), it, "title");
     }
-    int n = s->n_events_total;
+    int n = *n_total;
     store_unlock();
-    ESP_LOGI(TAG, "calendar data: %d events", n);
+    ESP_LOGI(TAG, "calendar data (%s): %d events", is_tomorrow ? "tomorrow" : "today", n);
     return true;
 }
 

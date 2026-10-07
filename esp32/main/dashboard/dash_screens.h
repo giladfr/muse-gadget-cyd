@@ -21,8 +21,10 @@ extern "C" {
 typedef enum {
     DASH_SCREEN_STOCKS = 0,
     DASH_SCREEN_WEATHER = 1,
-    DASH_SCREEN_CALENDAR = 2,
-    DASH_SCREEN_COUNT = 3,
+    DASH_SCREEN_CALENDAR = 2,      // today
+    DASH_SCREEN_CALENDAR_TOM = 3,  // tomorrow
+    DASH_SCREEN_CLOCK = 4,
+    DASH_SCREEN_COUNT = 5,
 } dash_screen_t;
 
 const char *dash_screen_name(dash_screen_t s);

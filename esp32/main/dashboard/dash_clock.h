@@ -22,6 +22,9 @@ bool dash_clock_valid(void);
 // Local time; false if the clock is not set.
 bool dash_clock_local(struct tm *out);
 
+// Israel time (Asia/Jerusalem); false if the clock is not set.
+bool dash_clock_israel(struct tm *out);
+
 // Seed the clock from a trusted unix time (the bridge's "now") if nothing has
 // set it yet. SNTP corrects it later.
 void dash_clock_seed(int64_t unix_s);
