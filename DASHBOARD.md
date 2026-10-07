@@ -30,7 +30,7 @@ itself back.
   Muse as a chat message, so Muse can ask and you answer with one tap.
 - **Over the air:** firmware (`device.ota`) and SD-card files (`sd.fetch`).
 
-Version: `esp32/version.txt` (1.4.1).
+Version: `esp32/version.txt` (1.4.5).
 
 ## Preview without a board
 
@@ -127,6 +127,47 @@ Run `tools/dash_sim/mac_gadget.sh` there too; only the rename is Mac-only.
 
 Touch and SD do **not** share the display's bus.
 
+## Hardware bring-up (v1.4.1–v1.4.5, Oct 2026)
+
+The ESP32-D0WD has 4 MB flash and **no PSRAM**. The dashboard + Link stack
+push internal RAM to the limit. These fixes were needed to get the first
+board online:
+
+- **v1.4.1 — Lean Link session.** The session needed ~80 KB of buffers; the
+  largest free block was ~64 KB (`session buffer alloc failed`). A
+  dashboard-specific lean mode cuts it to ~36 KB (4 KB WS TX, 8 KB WS RX,
+  4 KB + 4 KB scratch, 2× 8 KB inbound, 2 KB chunks).
+- **v1.4.2 — Double-free in `build_register_json`.** A `take_required` cJSON
+  object was added to 5 commands; cJSON takes ownership on add, so the tree
+  free freed it 5× (`tlsf_free` assert → reboot loop). Each command now gets
+  its own param objects. Also fixed SD commands to advertise `path`, not `url`.
+- **v1.4.3 — Register JSON 8 KB → 16 KB.** The dashboard's command
+  descriptions pushed the JSON past the 8 KB print buffer
+  (`could not build link.register`).
+- **v1.4.4 — Deferred dashboard RAM.** During BLE pairing, BLE + WiFi + TLS
+  exhausted the DMA heap (`wifi:mem fail`, 0K free). Strip buffers (5 KB) and
+  the render task (5 KB stack) now allocate on `dashboard_set_paired(true)`
+  instead of at boot.
+- **v1.4.5 — Night backlight 5% → 25%.** At 5% the quadratic brightness curve
+  gives a PWM duty of ~2/1023 — essentially black.
+
+**Pairing notes:**
+- Pairing needs BLE + WiFi + TLS simultaneously. If it fails with
+  `wifi:mem fail`, the board is out of DMA RAM — the v1.4.4+ deferred
+  allocation should prevent this.
+- To wipe WiFi/pairing without erasing firmware:
+  `esptool.py --chip esp32 --port /dev/cu.usbserial-11230 erase_region 0x9000 0x6000`
+  (NVS partition). Or hold BOOT (GPIO 0) for 5 s.
+- App-only flash (`write_flash 0x20000`) preserves NVS, WiFi, and pairing.
+
+**OTA notes:**
+- `device.ota` uses `esp_https_ota`. HTTPS works for small API calls, but the
+  TLS session for a 1.8 MB download does **not** fit in RAM
+  (`ESP_ERR_HTTP_CONNECT`). Serve the `.bin` over plain **HTTP** — the image
+  is RSA-signed, so HTTP is safe.
+- Example: `python3 -m http.server 8000` on a Mac on the same LAN, then
+  `device.ota {"url": "http://192.168.50.x:8000/cyd-dashboard-vX.Y.Z.bin"}`.
+
 ## Settings (Kconfig, "ESP32 Device SDK")
 
 Put personal values in `esp32/devices/sdkconfig.local` (git-ignored, see
@@ -139,7 +180,7 @@ Put personal values in `esp32/devices/sdkconfig.local` (git-ignored, see
 | `HOMEHUB_DASHBOARD_CLOCK_24H` | n | |
 | `HOMEHUB_DASHBOARD_BL_AUTO` | y | follow the light sensor |
 | `HOMEHUB_DASHBOARD_BL_LDR_BRIGHT` / `_DARK` | 50 / 600 | raw sensor readings; tune with `dashboard.debug` |
-| `HOMEHUB_DASHBOARD_BL_NIGHT_START` / `_END` / `_PCT` | 23 / 7 / 5% | night dimming (same hour = off) |
+| `HOMEHUB_DASHBOARD_BL_NIGHT_START` / `_END` / `_PCT` | 23 / 7 / 25% | night dimming (same hour = off) |
 | `HOMEHUB_DASHBOARD_BL_IDLE_MIN` / `_PCT` | 0 (off) / 30% | dim when untouched |
 | `HOMEHUB_DASHBOARD_TAKEOVER_TIMEOUT_MIN` | 10 | 0 = images stay until X |
 | `HOMEHUB_DASHBOARD_TOUCH_SWAP_XY` / `_INVERT_X` / `_INVERT_Y` | n | defaults until calibrated |

@@ -29,16 +29,11 @@ your own. Taps on your buttons come back to you as chat messages starting with
 
 Use this before acting on the user's behalf when a tap is enough to decide.
 
+**Important:** the `json` parameter must be a JSON *string*, not an object.
+Stringify the card object first.
+
 ```json
-dashboard.card {"json": {
-  "id": "groceries", "title": "Groceries", "sub": "Tuesday order", "tone": "accent",
-  "text": "Your usual order is ready: milk, eggs, sourdough, bananas and coffee. Place it for tomorrow 9-11 AM?",
-  "rows": [{"label": "Total", "value": "$64.20", "detail": "5 items"}],
-  "buttons": [
-    {"id": "yes", "label": "Order", "say": "Yes, place the usual grocery order for tomorrow 9-11."},
-    {"id": "later", "label": "Later", "say": "Remind me about groceries tonight."},
-    {"id": "no", "label": "Skip", "say": "Skip groceries this week."}],
-  "show": true, "ttl_s": 14400}}
+dashboard.card {"id": "groceries", "json": "{\"id\":\"groceries\",\"title\":\"Groceries\",\"sub\":\"Tuesday order\",\"tone\":\"accent\",\"text\":\"Your usual order is ready: milk, eggs, sourdough, bananas and coffee. Place it for tomorrow 9-11 AM?\",\"rows\":[{\"label\":\"Total\",\"value\":\"$64.20\",\"detail\":\"5 items\"}],\"buttons\":[{\"id\":\"yes\",\"label\":\"Order\",\"say\":\"Yes, place the usual grocery order for tomorrow 9-11.\"},{\"id\":\"later\",\"label\":\"Later\",\"say\":\"Remind me about groceries tonight.\"},{\"id\":\"no\",\"label\":\"Skip\",\"say\":\"Skip groceries this week.\"}],\"show\":true,\"ttl_s\":14400}"}
 ```
 
 - Write each button's `say` as the instruction you want to receive: the tap arrives as
@@ -52,11 +47,7 @@ dashboard.card {"json": {
 ### Show status (rows card)
 
 ```json
-dashboard.card {"json": {"id": "day", "title": "Your day", "sub": "so far", "rows": [
-  {"label": "Steps", "value": "6,240", "detail": "goal 10,000", "progress": 62, "tone": "up"},
-  {"label": "Inbox", "value": "14", "detail": "3 need a reply", "tone": "accent",
-   "spark": [22, 19, 25, 30, 18, 16, 14]},
-  {"label": "Build", "value": "failing", "detail": "main, 12 min ago", "tone": "down"}]}}
+dashboard.card {"id": "day", "json": "{\"id\":\"day\",\"title\":\"Your day\",\"sub\":\"so far\",\"rows\":[{\"label\":\"Steps\",\"value\":\"6,240\",\"detail\":\"goal 10,000\",\"progress\":62,\"tone\":\"up\"},{\"label\":\"Inbox\",\"value\":\"14\",\"detail\":\"3 need a reply\",\"tone\":\"accent\",\"spark\":[22,19,25,30,18,16,14]},{\"label\":\"Build\",\"value\":\"failing\",\"detail\":\"main, 12 min ago\",\"tone\":\"down\"}]}"}
 ```
 
 Rows: up to 5; `tone` is `up` (green), `down` (red), `accent` (amber), `blue` or `dim`;
@@ -70,15 +61,17 @@ dashboard.notify {"text": "Package delivered", "detail": "Front porch, 10:41 AM"
 ```
 
 `level`: `info`, `success`, `warning`, `alert`. Shows for 20 s (`ttl_s`; 0 = until tapped) and
-wakes a dimmed screen. `"card": "<id>"` makes a tap open that card. Up to 4 queue.
+wakes a dimmed screen. `"card": "<id>"` makes a tap open that card. Up to 4 queue; when full,
+the oldest waiting banner is dropped. No history — once a banner expires or is tapped, it's gone.
+For persistent alerts, use a card instead.
 
 ### Data the built-in screens use
 
 - Weather: run `bridge/fetch.py` from the gadget's repo and push its output with
-  `dashboard.data {"screen": "bridge", "json": <output>}`. Stocks in it are ignored while the
+  `dashboard.data {"screen": "bridge", "json": "<output as a JSON string>"}`. Stocks in it are ignored while the
   board fetches its own quotes.
-- Calendar: `dashboard.data {"screen": "calendar", "json": {"label": "Tuesday, Oct 6",
-  "events": [{"time": "5:45 PM", "title": "..."}]}}`. Push in the morning and when it changes.
+- Calendar: `dashboard.data {"screen": "calendar", "json": "{\"label\":\"Tuesday, Oct 6\",\"events\":[{\"time\":\"5:45 PM\",\"title\":\"...\"}]}"}`.
+  Push in the morning and when it changes. The `json` parameter must be a string.
 - Watchlist: `dashboard.stocks {"symbols": "AMD,NVDA,SPY"}` (up to 8).
 
 ### Images
