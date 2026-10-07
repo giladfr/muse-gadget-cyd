@@ -1107,10 +1107,17 @@ static void draw_splash(uint16_t *buf, int sy0, int sh, const frame_t *f) {
                        dash_mix(DASH_BG, DASH_ACCENT, alpha));
         dash_text(buf, sy0, sh, F_LARGE, x, y, w2, dash_mix(DASH_BG, DASH_TEXT, alpha));
     }
-    float v = clamp01((ms - 1300) / 500.0f);
+    // Version: a pill under the title, so it reads at a glance.
+    float v = clamp01((ms - 1100) / 400.0f);
     if (v > 0 && f->u.splash.version[0]) {
-        dash_text_c(buf, sy0, sh, F_SMALL, 0, DASH_W, SPLASH_TITLE_Y + 29,
-                    f->u.splash.version, dash_mix(DASH_BG, DASH_TEXT3, (int)(v * 255)));
+        int alpha = (int)(v * 255);
+        int tw = dash_text_w(F_SMALL, f->u.splash.version);
+        int x0 = (DASH_W - tw) / 2 - 9, x1 = (DASH_W + tw) / 2 + 9;
+        int y0 = SPLASH_TITLE_Y + 28, y1 = y0 + 19;
+        dash_round_rect(buf, sy0, sh, x0, y0, x1, y1, 9,
+                        dash_mix(DASH_BG, DASH_CARD2, alpha));
+        dash_text_c(buf, sy0, sh, F_SMALL, x0, x1, y0 + (19 - dash_font_small.line_h) / 2,
+                    f->u.splash.version, dash_mix(DASH_BG, DASH_TEXT, alpha));
     }
     // Loading dots, a wave running left to right.
     float d = clamp01((ms - 1500) / 400.0f);
