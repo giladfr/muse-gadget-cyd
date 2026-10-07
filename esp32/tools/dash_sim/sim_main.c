@@ -13,7 +13,8 @@
  *   tap X Y | swipe left|right | hold X Y MS | sleep MS
  *   ldr RAW | link on|off | wifi RSSI|off | chat ok|fail
  *   ota PCT|fail | image FILE.bmp | snap FILE.bmp | help | quit
- *   record MS PREFIX   (a screenshot every 40 ms: PREFIX_000.bmp, ...)
+ *   record MS PREFIX   (in the background, a screenshot every 40 ms:
+ *                       PREFIX_0000.bmp, ...)
  *   expect TEXT   (scripts: fail the run unless the last output contains TEXT)
  *
  * Connected to a real Muse (tools/dash_sim/mac_gadget.sh): --listen takes
@@ -57,7 +58,7 @@ static void rgb_of(uint16_t be, uint8_t *r, uint8_t *g, uint8_t *b) {
 }
 
 // 24-bit BMP of the panel (what the LCD shows, before the backlight).
-static bool snap(const char *path) {
+static bool snap_buf(const char *path, bool shown) {
     FILE *f = fopen(path, "wb");
     if (!f) return false;
     const int w = 320, h = 240, row = w * 3, size = 54 + row * h;
@@ -70,10 +71,11 @@ static bool snap(const char *path) {
     fwrite(hdr, 1, 54, f);
     uint8_t line[320 * 3];
     sim_fb_lock();
+    if (shown) sim_fb_settle();
     for (int y = h - 1; y >= 0; y--) {
         for (int x = 0; x < w; x++) {
             uint8_t r, g, b;
-            rgb_of(g_sim.fb[y][x], &r, &g, &b);
+            rgb_of(shown ? g_sim.shown[y][x] : g_sim.fb[y][x], &r, &g, &b);
             line[x * 3] = b; line[x * 3 + 1] = g; line[x * 3 + 2] = r;
         }
         fwrite(line, 1, (size_t)row, f);
@@ -81,6 +83,10 @@ static bool snap(const char *path) {
     sim_fb_unlock();
     fclose(f);
     return true;
+}
+
+static bool snap(const char *path) {
+    return snap_buf(path, false);
 }
 
 // ---- gestures (on their own thread so the window keeps drawing) ---------------
@@ -150,14 +156,16 @@ static void show_image(const char *path) {
 
 static cJSON *muse_command(const char *cmd, cJSON *params) {
     const char *err = "bad parameters";
-    // dashboard.card / notify take the fields, or all of them in "json".
+    // dashboard.card / notify take the fields, or all of them in "json" (an
+    // object or a JSON string, as Muse sends it), like app.c.
     cJSON *json = cJSON_GetObjectItem(params, "json");
-    const cJSON *obj = cJSON_IsObject(json) ? json : params;
-    if (!strcmp(cmd, "dashboard.card")) {
-        return dashboard_card(obj, &err) ? ok() : fail(err);
-    }
-    if (!strcmp(cmd, "dashboard.notify")) {
-        return dashboard_notify(obj, &err) ? ok() : fail(err);
+    if (!strcmp(cmd, "dashboard.card") || !strcmp(cmd, "dashboard.notify")) {
+        cJSON *parsed = cJSON_IsString(json) ? cJSON_Parse(json->valuestring) : NULL;
+        const cJSON *obj = parsed ? parsed : cJSON_IsObject(json) ? json : params;
+        bool r = !strcmp(cmd, "dashboard.card") ? dashboard_card(obj, &err)
+                                                : dashboard_notify(obj, &err);
+        cJSON_Delete(parsed);
+        return r ? ok() : fail(err);
     }
     if (!strcmp(cmd, "dashboard.data")) {
         cJSON *screen = cJSON_GetObjectItem(params, "screen");
@@ -202,6 +210,25 @@ static cJSON *muse_command(const char *cmd, cJSON *params) {
         dashboard_takeover_end();
         return ok();
     }
+    return NULL;
+}
+
+typedef struct {
+    int ms;
+    char prefix[201];
+} record_t;
+
+static void *record_thread(void *p) {
+    record_t *r = p;
+    int n = 0;
+    for (int t = 0; t < r->ms && !s_quit; t += 40, n++) {
+        char path[280];
+        snprintf(path, sizeof(path), "%.200s_%04d.bmp", r->prefix, n % 10000);
+        snap_buf(path, true);  // whole frames only
+        usleep(40000);
+    }
+    printf("recorded %d frames\n", n);
+    free(r);
     return NULL;
 }
 
@@ -255,16 +282,16 @@ static void run_line(char *line) {
         printf("%s: expect \"%s\"%s%s\n", pass ? "PASS" : "FAIL", rest,
                pass ? "" : " in: ", pass ? "" : s_last);
     } else if (!strcmp(cmd, "record") && sscanf(rest, "%d %200s", &a, word) == 2) {
-        // Frames as the panel shows them, e.g. for a GIF of an animation.
-        int n = 0;
-        for (int t = 0; t < a; t += 40, n++) {
-            char path[280];
-            snprintf(path, sizeof(path), "%.200s_%03d.bmp", word, n % 1000);
-            snap(path);
-            usleep(40000);
-        }
-        printf("recorded %d frames\n", n);
-    } else if (!strcmp(cmd, "snap") && sscanf(rest, "%255s", word) == 1) {
+        // Frames as the panel shows them, e.g. for a GIF, while the script
+        // goes on driving the dashboard.
+        record_t *r = malloc(sizeof(*r));
+        pthread_t th;
+        if (r) {
+            r->ms = a;
+            snprintf(r->prefix, sizeof(r->prefix), "%.200s", word);
+            if (pthread_create(&th, NULL, record_thread, r) == 0) pthread_detach(th);
+            else free(r);
+        }    } else if (!strcmp(cmd, "snap") && sscanf(rest, "%255s", word) == 1) {
         usleep(150000);  // let the frame in progress land
         printf("%s %s\n", snap(word) ? "saved" : "can't write", word);
     } else {

@@ -6,6 +6,9 @@
 
 typedef struct {
     uint16_t fb[240][320];   // panel memory: RGB565, high byte first
+    // The last complete frame (fb as of the end of the last full pass), for
+    // recordings without half-drawn frames.
+    uint16_t shown[240][320];
     volatile unsigned frames;
     // Touch (screen pixels).
     volatile bool pen;
@@ -33,3 +36,5 @@ void sim_pen(bool down, int x, int y);
 void sim_nvs_load(void);
 void sim_fb_lock(void);
 void sim_fb_unlock(void);
+// Update `shown` if the panel has been idle a while; call with the fb lock.
+void sim_fb_settle(void);

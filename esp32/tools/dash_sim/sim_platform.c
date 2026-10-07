@@ -506,14 +506,29 @@ static bool s_active;
 static const uint16_t *s_pending;
 static int s_px, s_py, s_pw, s_ph;
 
+static int s_last_y = -1;
+static int64_t s_last_blit_us;
+
 static void blit(int x, int y, int w, int h, const uint16_t *p) {
     pthread_mutex_lock(&s_fb_m);
+    // Strips go top to bottom; one starting higher up begins a new pass, so
+    // what is on the panel now is a finished frame.
+    if (y < s_last_y) memcpy(g_sim.shown, g_sim.fb, sizeof(g_sim.fb));
+    s_last_y = y;
+    s_last_blit_us = mono_us();
     for (int r = 0; r < h; r++) memcpy(&g_sim.fb[y + r][x], p + r * w, (size_t)w * 2);
     g_sim.frames++;
     pthread_mutex_unlock(&s_fb_m);
 }
 
 void sim_fb_lock(void) { pthread_mutex_lock(&s_fb_m); }
+
+void sim_fb_settle(void) {
+    if (mono_us() - s_last_blit_us > 12000) {
+        memcpy(g_sim.shown, g_sim.fb, sizeof(g_sim.fb));
+        s_last_y = -1;
+    }
+}
 void sim_fb_unlock(void) { pthread_mutex_unlock(&s_fb_m); }
 
 void dashboard_display_set_active(bool on) {

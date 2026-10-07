@@ -7,7 +7,10 @@ itself back.
 
 ![Dashboard screens](docs/dashboard/screens.png)
 
-![Price flash and slide transitions](docs/dashboard/demo.gif)
+![Feature demo: splash, live stocks, weather, calendars, a Muse banner, the clock and a Muse card answered with one tap](docs/dashboard/demo.gif)
+
+The demo above is the real dashboard code running in the simulator
+(`esp32/tools/dash_sim/demo/make_demo.sh` records `demo/demo.txt` into it).
 
 ## What it is
 
@@ -175,7 +178,8 @@ while the Link comes up. It runs 3.4 s; taps during it are ignored.
   check it. Like the avatar, the artwork isn't covered by the Apache
   License.
 - **Watch it:** in the simulator (`build-sim/dash_sim`), or record it with
-  `record 4400 frame` in its console (a BMP every 40 ms).
+  `record 4400 frame` in its console. That saves a whole frame every 40 ms
+  in the background while the script carries on.
 
 ## Clock screen (v1.5.0–v1.5.4)
 
