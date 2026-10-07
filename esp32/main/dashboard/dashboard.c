@@ -14,6 +14,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_app_desc.h"
+
 #include "dash_backlight.h"
 #include "dash_cards.h"
 #include "dash_clock.h"
@@ -68,6 +70,7 @@ static int s_screen = DASH_SCREEN_STOCKS;  // or DASH_SCREEN_COUNT + card
 static int s_slide = 0;          // pending screen change: -1 / +1
 static bool s_paired = false;
 static bool s_link = false;
+static int64_t s_splash_until = 0;  // show version splash until this time (us)
 static bool s_full = false;      // repaint the whole screen
 static bool s_changed = false;   // data changed: diff and repaint those rows
 static bool s_restore = false;   // leaving an image: reset the panel first
@@ -403,6 +406,8 @@ static void dash_task(void *arg) {
             if (!paired) continue;
             activate();
             active = true;
+            // Show version splash for 2.5 seconds on boot.
+            s_splash_until = now_ms() + 2500;
         }
 
         dash_backlight_update();
@@ -493,7 +498,18 @@ static void dash_task(void *arg) {
         xSemaphoreTake(s_render_lock, portMAX_DELAY);
         int y0, y1;
         bool repaint = full || need_full;
-        dash_screen_prepare(sc, &status, repaint || slide, &y0, &y1);
+        // Boot splash: show version for 2.5s after activation.
+        if (s_splash_until && now < s_splash_until) {
+            const esp_app_desc_t *desc = esp_app_get_description();
+            char ver[40];
+            snprintf(ver, sizeof(ver), "v%s", desc->version);
+            dash_screen_prepare_message("Muse Dashboard", ver, "Starting...",
+                                        -1, -1, -1);
+            y0 = 0; y1 = DASH_H;
+        } else {
+            s_splash_until = 0;
+            dash_screen_prepare(sc, &status, repaint || slide, &y0, &y1);
+        }
         if (slide && !repaint) {
             need_full = !render_slide(slide);
         } else if (y0 < y1) {

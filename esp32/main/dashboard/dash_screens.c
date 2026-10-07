@@ -402,8 +402,9 @@ static void build_clock(frame_t *f) {
     } else {
         snprintf(f->u.clock.israel, sizeof(f->u.clock.israel), "--:--");
     }
-    // Animate: redraw every second for the second hand.
-    s_animating = true;
+    // Don't set s_animating: the header tick refreshes once per second,
+    // which is enough for the second hand. Continuous redraws starve the
+    // DMA heap on this no-PSRAM board.
     set_sub(f, f->u.clock.date);
 }
 
@@ -762,44 +763,29 @@ static void draw_clock(uint16_t *buf, int sy0, int sh, const frame_t *f) {
         draw_empty(buf, sy0, sh, f);
         return;
     }
-    // Analog clock centered in the content area.
-    float cx = DASH_W / 2.0f;
-    float cy = (DASH_CONTENT_Y0 + DASH_CONTENT_Y1) / 2.0f - 10;
-    float r = 68.0f;
-    // Face
-    dash_circle(buf, sy0, sh, cx, cy, r, DASH_WHITE);
-    // 12 hour ticks
-    for (int i = 0; i < 12; i++) {
-        float a = i * 30.0f * 3.14159265f / 180.0f;
-        float r1 = (i % 3 == 0) ? r - 10 : r - 6;
-        float x0 = cx + r1 * sinf(a), y0 = cy - r1 * cosf(a);
-        float x1 = cx + (r - 2) * sinf(a), y1 = cy - (r - 2) * cosf(a);
-        dash_line(buf, sy0, sh, x0, y0, x1, y1, DASH_WHITE, i % 3 == 0 ? 3 : 2);
-    }
-    // Hands (angles from 12 o'clock, clockwise)
-    float hr_a = ((f->u.clock.hour % 12) + f->u.clock.minute / 60.0f) * 30.0f
-                 * 3.14159265f / 180.0f;
-    float min_a = (f->u.clock.minute + f->u.clock.second / 60.0f) * 6.0f
-                  * 3.14159265f / 180.0f;
-    float sec_a = f->u.clock.second * 6.0f * 3.14159265f / 180.0f;
-    // Hour hand
-    dash_line(buf, sy0, sh, cx, cy,
-              cx + (r - 28) * sinf(hr_a), cy - (r - 28) * cosf(hr_a),
-              DASH_WHITE, 4);
-    // Minute hand
-    dash_line(buf, sy0, sh, cx, cy,
-              cx + (r - 14) * sinf(min_a), cy - (r - 14) * cosf(min_a),
-              DASH_WHITE, 3);
-    // Second hand (red)
-    dash_line(buf, sy0, sh, cx, cy,
-              cx + (r - 8) * sinf(sec_a), cy - (r - 8) * cosf(sec_a),
-              DASH_DOWN, 2);
-    // Center dot
-    dash_circle(buf, sy0, sh, cx, cy, 3, DASH_WHITE);
-    // Israel digital time below the clock
+    // Simple digital clock (analog face disabled for debugging).
+    // Center the time big, date below, Israel time at bottom.
+    int cy = (DASH_CONTENT_Y0 + DASH_CONTENT_Y1) / 2;
+    char time_str[16];
+#if CONFIG_HOMEHUB_DASHBOARD_CLOCK_24H
+    snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d",
+             f->u.clock.hour, f->u.clock.minute, f->u.clock.second);
+#else
+    int h = f->u.clock.hour % 12;
+    snprintf(time_str, sizeof(time_str), "%d:%02d:%02d %s",
+             h ? h : 12, f->u.clock.minute, f->u.clock.second,
+             f->u.clock.hour < 12 ? "AM" : "PM");
+#endif
+    // Big time
+    dash_text_c(buf, sy0, sh, F_HUGE, 0, DASH_W, cy - 40,
+                time_str, DASH_TEXT);
+    // Date
+    dash_text_c(buf, sy0, sh, F_BODY, 0, DASH_W, cy + 10,
+                f->u.clock.date, DASH_TEXT2);
+    // Israel time
     char israel_line[32];
     snprintf(israel_line, sizeof(israel_line), "Israel %s", f->u.clock.israel);
-    dash_text_c(buf, sy0, sh, F_BODY, 0, DASH_W, (int)(cy + r + 8),
+    dash_text_c(buf, sy0, sh, F_BODY, 0, DASH_W, cy + 35,
                 israel_line, DASH_TEXT2);
 }
 
