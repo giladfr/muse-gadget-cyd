@@ -201,7 +201,9 @@ int main(void) {
     dashboard_set_paired(true);
     settle(2600);
     snap("splash");
-    settle(1200);  // the 3.4 s boot splash ends
+    settle(1200);  // the 3.4 s boot splash ends on the clock (Tue 10:42:xx CDT)
+    snap("clock");
+    tap(300, 228); settle(500);  // ">" to stocks, before any arrive
     snap("stocks_empty");
 
     static const char *const sym[] = {"AMD", "NVDA", "AAPL", "MSFT", "SPY", "QQQ", "TSLA", "META"};
@@ -251,11 +253,6 @@ int main(void) {
     tap(20, 228); settle(500);  // "<" back to weather
     tap(20, 228); settle(500);  // "<" to stocks
     snap("stocks_compact");
-
-    // "<" from the first screen wraps to the clock (Tue 10:42:xx CDT).
-    tap(20, 228); settle(500);
-    snap("clock");
-    tap(300, 228); settle(500);  // ">" back to stocks
 
     // Firmware update progress.
     dashboard_ota_progress(0); settle(150);

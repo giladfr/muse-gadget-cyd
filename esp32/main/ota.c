@@ -26,6 +26,10 @@ void ota_set_progress_cb(ota_progress_cb cb) {
     s_progress_cb = cb;
 }
 
+void ota_report_progress(int pct) {
+    if (s_progress_cb) s_progress_cb(pct);
+}
+
 bool ota_is_enabled(void) {
 #if CONFIG_HOMEHUB_OTA_ENABLED
     return true;

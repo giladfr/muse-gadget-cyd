@@ -67,15 +67,16 @@ For persistent alerts, use a card instead.
 
 ### Data the built-in screens use
 
-- Weather: run `bridge/fetch.py` from the gadget's repo and push its output with
-  `dashboard.data {"screen": "bridge", "json": "<output as a JSON string>"}`. Stocks in it are ignored while the
-  board fetches its own quotes.
+- Weather and stocks: run `bridge/fetch.py` from the gadget's repo and push its output with
+  `dashboard.data {"screen": "bridge", "json": "<output as a JSON string>"}`. This board has no
+  RAM for its own Nasdaq fetches while connected to you, so push stocks every minute or two in
+  US market hours (9:30-16:00 New York), and hourly otherwise.
 - Calendar: push today's events with `dashboard.data {"screen": "calendar", "json": "{\"label\":\"Tuesday, Oct 6\",\"events\":[{\"time\":\"5:45 PM\",\"title\":\"...\"}]}"}`,
   and tomorrow's with `"day":"tomorrow"` added: `{\"day\":\"tomorrow\",\"label\":\"Wednesday, Oct 7\",\"events\":[...]}`.
   The board shows them on separate Today/Tomorrow screens. Push in the morning and when it changes.
   The `json` parameter must be a string.
 - Watchlist: `dashboard.stocks {"symbols": "AMD,NVDA,SPY"}` (up to 8).
-- Clock: the board shows an analog clock (local time) plus Israel digital time automatically once
+- Clock: the first screen, shown at boot: an analog clock (local time) plus Israel time, once
   the clock is set (SNTP). No data push needed.
 
 ### Images
@@ -83,6 +84,26 @@ For persistent alerts, use a card instead.
 `dashboard.takeover {"url": "http://..."}` shows a baseline JPEG full-screen with an X (back to
 the dashboard after 10 minutes). For files you will show again, put them on the board's SD
 card once with `sd.fetch {"url", "path"}` and show them with `display.draw_sd {"path"}`.
+
+### Firmware updates (`ota.*`)
+
+`device.ota` needs an HTTPS download this board has no RAM for. Push the signed `.bin`
+yourself over this session instead, **from a script on your VM** (a 1.8 MB image is ~450
+calls; don't make them one by one). `esp32/tools/ota_push.py` in the gadget's repo does it:
+`push(path, invoke)`, with `invoke(command, params)` calling the device command and returning
+its payload. The protocol, if you write your own:
+
+1. `ota.begin {"size": <bytes>, "sha256": "<hex of the whole .bin>"}` → `{next, chunk_max}`.
+   The same size and sha256 again resumes; `next` says where.
+2. `ota.write {"offset": next, "data": "<base64 of up to chunk_max bytes>"}` → `{next}`, until
+   `next == size`. A refused write says the `next` the board expects; carry on from there (that
+   also covers a retry after a lost reply).
+3. `ota.finish {}` → `{version}`. The board checks the SHA-256, verifies the image signature,
+   switches to it and reboots within 3 s. It comes back on the new version, or rolls back by
+   itself if the new one can't reach you within a few minutes.
+
+The screen shows the progress. An update with no chunk for 2 minutes is abandoned (`ota.begin`
+starts it again). `ota.abort {}` cancels.
 
 ## Good proactive uses
 

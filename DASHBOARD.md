@@ -14,10 +14,10 @@ The demo above is the real dashboard code running in the simulator
 
 ## What it is
 
-- **Screens:** stocks (with sparklines and a flash when a price moves),
-  weather (icons, 4-day forecast), today's and tomorrow's calendar (past
-  events dimmed, the next one highlighted), and an analog clock with Israel
-  time under it. Long lists switch to compact rows.
+- **Screens:** an analog clock with Israel time (first, shown at boot),
+  stocks (with sparklines and a flash when a price moves),
+  weather (icons, 4-day forecast), and today's and tomorrow's calendar (past
+  events dimmed, the next one highlighted). Long lists switch to compact rows.
 - **Header:** clock (SNTP + your time zone), Link status dot, Wi-Fi bars.
 - **Touch:** swipe or tap the `<` `>` zones; screens slide. Hold a finger
   down for 5 s to calibrate touch.
@@ -34,7 +34,7 @@ The demo above is the real dashboard code running in the simulator
   Muse as a chat message, so Muse can ask and you answer with one tap.
 - **Over the air:** firmware (`device.ota`) and SD-card files (`sd.fetch`).
 
-Version: `esp32/version.txt` (1.5.6).
+Version: `esp32/version.txt` (1.6.0).
 
 ## Preview without a board
 
@@ -177,6 +177,10 @@ board online:
   stocks on this board, have Muse push them (`dashboard.data` "bridge", e.g.
   `bridge/fetch.py` on the VM every minute or two in market hours); pushed
   quotes are taken whenever the board's own fetches aren't arriving.
+- Command results: fields a handler returned next to `ok` (the dashboard's
+  `status`, `debug` and `events`, `sd.info`, `sd.list`) never reached Muse;
+  only `payload` was forwarded. Fixed in v1.6.0: without a `payload`,
+  whatever else the result holds becomes it.
 - Host tests: the OTA and log-tag tests pass again (fakes for the crash
   guard and progress calls; `sd.*`/`dash.display` log tags renamed to
   `link.*`), and the tunnel test follows the `defined(CONFIG_SPIRAM)` fix.
@@ -274,6 +278,38 @@ Put personal values in `esp32/devices/sdkconfig.local` (git-ignored, see
 | `HOMEHUB_DASHBOARD_BRIDGE_POLL` / `_URL` | n | poll a self-hosted `bridge.py` (not needed) |
 
 ## Updating over the air
+
+### Pushed by Muse in chunks (v1.6.0+, recommended)
+
+A Muse VM can only serve HTTPS, and an HTTPS download needs a second TLS
+session (~40-64 KB) that doesn't fit next to the Link session on this
+no-PSRAM board. From 1.6.0, Muse pushes the image itself over the encrypted
+session it already has, so no URL and no second TLS session are needed:
+
+```
+ota.begin  {"size": N, "sha256": "<hex>"}  -> {next, chunk_max: 4096}
+ota.write  {"offset": next, "data": "<base64>"}  -> {next}   (repeat)
+ota.finish {}  -> {version}   (verifies SHA-256 + signature, reboots in 3 s)
+```
+
+- `esp32/tools/ota_push.py` drives it from the VM: `push(path, invoke)`, or
+  `ota_push.py image.bin --invoke '<program> {command} {params_file}'`.
+  It's about 450 calls for 1.8 MB, so it has to run as a script, not as
+  separate tool calls. It retries, resyncs from the board's `next` after a
+  lost reply, and starts again if the board abandoned the update. The skill
+  tells Muse all of this.
+- Chunks go straight to flash in the inactive slot (sequential erase), with
+  no buffer beyond the request itself (base64 is decoded in place). The
+  screen shows progress. Two minutes without a chunk abandons the update.
+- The usual safety still applies after the reboot: rollback unless the new
+  image reaches Muse and runs the dashboard for 30 s, and the crash-loop
+  guard.
+- Tests: `tests/test_ota_push.py` (receiver against fakes: resume,
+  out-of-order and oversized chunks, SHA mismatch, failed verification, idle
+  timeout) and `tests/test_ota_push_sender.py` (sender against lost replies
+  and an abandoned update).
+
+### From a URL (device.ota)
 
 No USB needed once 1.1.0 or later is on the board. **Flash the latest over
 USB once before closing the case:** 1.0.5 only accepts `https://` OTA URLs (which may

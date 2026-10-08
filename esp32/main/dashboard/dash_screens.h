@@ -19,11 +19,12 @@ extern "C" {
 #endif
 
 typedef enum {
-    DASH_SCREEN_STOCKS = 0,
-    DASH_SCREEN_WEATHER = 1,
-    DASH_SCREEN_CALENDAR = 2,      // today
-    DASH_SCREEN_CALENDAR_TOM = 3,  // tomorrow
-    DASH_SCREEN_CLOCK = 4,
+    // In swipe order; the first is the one shown at boot.
+    DASH_SCREEN_CLOCK = 0,
+    DASH_SCREEN_STOCKS = 1,
+    DASH_SCREEN_WEATHER = 2,
+    DASH_SCREEN_CALENDAR = 3,      // today
+    DASH_SCREEN_CALENDAR_TOM = 4,  // tomorrow
     DASH_SCREEN_COUNT = 5,
 } dash_screen_t;
 

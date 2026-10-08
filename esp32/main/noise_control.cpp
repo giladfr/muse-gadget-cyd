@@ -1609,6 +1609,44 @@ static char *build_register_json(void) {
                     "Download a firmware image from `url` and apply it "
                     "(esp_https_ota), then reboot.",
                     ota_required, ota_optional);
+#if CONFIG_HOMEHUB_DASHBOARD
+        // No RAM here for the HTTPS download device.ota needs: Muse pushes
+        // the image itself, in chunks over this session (ota_push.c).
+        {
+            cJSON *begin_required = cJSON_CreateObject();
+            cJSON *size_param = cJSON_CreateObject();
+            cJSON_AddStringToObject(size_param, "type", "integer");
+            cJSON_AddStringToObject(size_param, "description", "Image size in bytes.");
+            cJSON_AddItemToObject(begin_required, "size", size_param);
+            cJSON_AddItemToObject(begin_required, "sha256",
+                                  string_param("SHA-256 of the whole .bin, hex."));
+            add_command(commands, "ota.begin",
+                        "Firmware update pushed in chunks over this session (no "
+                        "URL needed): start, or resume the same image. Returns "
+                        "next (offset to write) and chunk_max. Then ota.write "
+                        "until next == size, then ota.finish. Drive it from a "
+                        "script; see the gadget-cyd-desk-dashboard skill.",
+                        begin_required, nullptr);
+            cJSON *write_required = cJSON_CreateObject();
+            cJSON *offset_param = cJSON_CreateObject();
+            cJSON_AddStringToObject(offset_param, "type", "integer");
+            cJSON_AddStringToObject(offset_param, "description",
+                                    "Byte offset; must equal the last next.");
+            cJSON_AddItemToObject(write_required, "offset", offset_param);
+            cJSON_AddItemToObject(write_required, "data",
+                                  string_param("Up to chunk_max bytes, base64."));
+            add_command(commands, "ota.write",
+                        "Write the next chunk. Returns next; a wrong offset is "
+                        "refused with the expected next.",
+                        write_required, nullptr);
+            add_command(commands, "ota.finish",
+                        "Check the SHA-256, verify the signed image, switch to "
+                        "it and reboot. Returns the new version.",
+                        nullptr, nullptr);
+            add_command(commands, "ota.abort", "Abandon a pushed update.",
+                        nullptr, nullptr);
+        }
+#endif
     }
 
     cJSON_AddItemToObject(params, "commands_v2", commands);
@@ -1901,6 +1939,20 @@ static char *wrap_result_json(const char *request_id, cJSON *result) {
     }
 
     cJSON *error = cJSON_DetachItemFromObject(result, "error");
+    // Handlers that put their fields at the top level ({"ok": true,
+    // "status": ...}, as the dashboard and SD commands do) lost them here:
+    // without a payload, whatever else is left becomes the payload.
+    cJSON_DeleteItemFromObject(result, "payload_json");
+    if (!payload && result->child) {
+        payload = result;
+        result = nullptr;
+        if (!cJSON_AddItemToObject(root, "payload", payload)) {
+            cJSON_Delete(payload);
+            cJSON_Delete(error);
+            cJSON_Delete(root);
+            return nullptr;
+        }
+    }
     if (error) {
         cJSON *msg = cJSON_GetObjectItem(error, "message");
         if (cJSON_IsString(msg) && msg->valuestring) {

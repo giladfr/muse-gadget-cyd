@@ -25,6 +25,7 @@ set(GADGET_SRCS
     "stack_monitor.c"
     "bug_report.c"
     "ota.c"
+    "ota_push.c"
     "image_fetch.c"
     "../avatar/happy_anim.c"
     "pixel_font.c"

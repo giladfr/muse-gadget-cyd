@@ -73,7 +73,7 @@ typedef enum {
 // Guarded by s_lock (s_state is also read without it by the renderer, which
 // only needs to notice that it changed).
 static volatile dash_state_t s_state = DASH_OFF;
-static int s_screen = DASH_SCREEN_STOCKS;  // or DASH_SCREEN_COUNT + card
+static int s_screen = DASH_SCREEN_CLOCK;  // or DASH_SCREEN_COUNT + card
 static int s_slide = 0;          // pending screen change: -1 / +1
 static bool s_paired = false;
 static bool s_link = false;
@@ -465,7 +465,7 @@ static void dash_task(void *arg) {
         // A removed card can't stay on screen.
         if (sc >= dash_screen_total()) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
-            s_screen = sc = DASH_SCREEN_STOCKS;
+            s_screen = sc = DASH_SCREEN_CLOCK;
             xSemaphoreGive(s_lock);
             full = true;
         }

@@ -53,6 +53,8 @@ void ota_start(const char *url, bool force, ota_status_cb cb, void *user);
 // clear. Available whether or not OTA is enabled.
 typedef void (*ota_progress_cb)(int pct);
 void ota_set_progress_cb(ota_progress_cb cb);
+// Report progress the same way from another updater (ota_push.c).
+void ota_report_progress(int pct);
 
 // Crash-loop guard. Call ota_crash_guard_boot() first thing at boot: after
 // three crash resets in a row (panic or watchdog) it boots the other OTA slot,

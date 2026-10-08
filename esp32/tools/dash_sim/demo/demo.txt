@@ -1,6 +1,6 @@
 # CYD dashboard feature demo (make_demo.sh turns it into docs/dashboard/demo.gif).
 # Everything after the splash is what Muse sends, or a finger on the panel.
-record 23000 frame
+record 24000 frame
 # Muse's data arrives while the splash plays.
 sleep 1200
 dashboard.data {"screen": "bridge", "json": "{\"stocks\": [{\"symbol\": \"AMD\", \"price\": 159.75, \"change\": -2.1, \"changePct\": -1.31, \"market\": \"Open\"}, {\"symbol\": \"NVDA\", \"price\": 184.58, \"change\": 1.2, \"changePct\": 0.65, \"market\": \"Open\"}, {\"symbol\": \"AAPL\", \"price\": 231.64, \"change\": 1.2, \"changePct\": 0.52, \"market\": \"Open\"}, {\"symbol\": \"MSFT\", \"price\": 512.09, \"change\": -2.1, \"changePct\": -0.41, \"market\": \"Open\"}, {\"symbol\": \"SPY\", \"price\": 676.74, \"change\": 1.2, \"changePct\": 0.18, \"market\": \"Open\"}]}"}
@@ -16,8 +16,11 @@ dashboard.data {"screen": "bridge", "json": "{\"stocks\": [{\"symbol\": \"AMD\",
 dashboard.data {"screen": "bridge", "json": "{\"weather\": {\"location\": \"Austin, TX\", \"temp\": 78, \"feels\": 81, \"code\": 2, \"desc\": \"Partly cloudy\", \"humidity\": 55, \"wind\": 8, \"forecast\": [{\"day\": \"Today\", \"high\": 85, \"low\": 66, \"code\": 2}, {\"day\": \"Wed\", \"high\": 88, \"low\": 69, \"code\": 0}, {\"day\": \"Thu\", \"high\": 79, \"low\": 64, \"code\": 61}, {\"day\": \"Fri\", \"high\": 72, \"low\": 58, \"code\": 95}]}}"}
 dashboard.data {"screen": "calendar", "json": "{\"label\": \"4 events\", \"events\": [{\"time\": \"8:30 AM\", \"title\": \"Team standup\"}, {\"time\": \"10:00 AM\", \"title\": \"Design review: CYD dashboard\"}, {\"time\": \"12:30 PM\", \"title\": \"Lunch with Dana\"}, {\"time\": \"5:45 PM\", \"title\": \"Pick up groceries\"}]}"}
 dashboard.data {"screen": "calendar", "json": "{\"label\": \"9 events\", \"day\": \"tomorrow\", \"events\": [{\"time\": \"7:30 AM\", \"title\": \"Gym\"}, {\"time\": \"9:00 AM\", \"title\": \"Standup\"}, {\"time\": \"11:30 AM\", \"title\": \"Roadmap planning\"}, {\"time\": \"1:00 PM\", \"title\": \"Interview - firmware engineer\"}, {\"time\": \"3:00 PM\", \"title\": \"Dentist\"}, {\"time\": \"4:30 PM\", \"title\": \"School pickup\"}, {\"time\": \"6:00 PM\", \"title\": \"Dinner\"}, {\"time\": \"8:00 PM\", \"title\": \"Movie night\"}, {\"time\": \"9:30 PM\", \"title\": \"Call parents\"}]}"}
+# The clock comes first: analog, with Israel time.
+sleep 4300
 # Stocks, then live quotes move: rows flash green/red.
-sleep 3300
+swipe left
+sleep 1500
 dashboard.data {"screen": "bridge", "json": "{\"stocks\": [{\"symbol\": \"AMD\", \"price\": 155.85, \"change\": -6.0, \"changePct\": -3.85, \"market\": \"Open\"}, {\"symbol\": \"NVDA\", \"price\": 189.65, \"change\": 6.27, \"changePct\": 3.31, \"market\": \"Open\"}, {\"symbol\": \"AAPL\", \"price\": 237.88, \"change\": 7.44, \"changePct\": 3.13, \"market\": \"Open\"}, {\"symbol\": \"MSFT\", \"price\": 504.68, \"change\": -9.51, \"changePct\": -1.88, \"market\": \"Open\"}, {\"symbol\": \"SPY\", \"price\": 685.32, \"change\": 9.78, \"changePct\": 1.43, \"market\": \"Open\"}]}"}
 sleep 1700
 # Swipe through weather and today's calendar.
@@ -30,9 +33,6 @@ dashboard.notify {"text":"Standup in 10 min","detail":"Room 4B, bring the demo",
 sleep 2000
 swipe left
 sleep 1600
-# The clock: analog, with Israel time.
-swipe left
-sleep 2600
 # Muse asks a question on its own card; one tap answers.
 dashboard.card {"json": "{\"id\": \"coffee\", \"title\": \"Coffee run\", \"sub\": \"from Muse\", \"text\": \"Dana is heading to Houndstooth. Want your usual oat flat white?\", \"rows\": [{\"label\": \"Order\", \"value\": \"$5.25\", \"detail\": \"ready in ~10 min\"}], \"buttons\": [{\"id\": \"yes\", \"label\": \"Yes please\", \"say\": \"Yes, get me my usual.\"}, {\"id\": \"no\", \"label\": \"Not today\"}], \"show\": true}"}
 sleep 2000

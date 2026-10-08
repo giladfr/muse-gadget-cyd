@@ -67,6 +67,7 @@
 #include "tunnel_netif.h"
 #include "net_discovery.h"
 #include "ota.h"
+#include "ota_push.h"
 #include "link_pairing.h"
 #include "bug_report.h"
 #include "diagnostic_log.h"
@@ -1867,6 +1868,66 @@ static cJSON *bug_report_command(
 }
 #endif
 
+#if CONFIG_HOMEHUB_DASHBOARD && CONFIG_HOMEHUB_OTA_ENABLED
+// ota.begin / ota.write / ota.finish / ota.abort: a firmware image pushed in
+// chunks over the session (ota_push.c). Runs on the session task; a 4 KB
+// flash write takes tens of milliseconds.
+static cJSON *ota_push_command(const char *command, cJSON *params) {
+    const char *err = NULL;
+    uint32_t next = 0, size = 0;
+    bool ok = false;
+    cJSON *result = cJSON_CreateObject();
+    if (!result) return NULL;
+    if (strcmp(command, "ota.begin") == 0) {
+        cJSON *sz = cJSON_GetObjectItem(params, "size");
+        cJSON *sha = cJSON_GetObjectItem(params, "sha256");
+        if (!cJSON_IsNumber(sz) || sz->valuedouble < 1 || !cJSON_IsString(sha)) {
+            err = "size and sha256 are required";
+        } else {
+            size = (uint32_t)sz->valuedouble;
+            ok = ota_push_begin(size, sha->valuestring, &next, &err);
+            cJSON_AddNumberToObject(result, "chunk_max", OTA_PUSH_CHUNK_MAX);
+        }
+    } else if (strcmp(command, "ota.write") == 0) {
+        cJSON *off = cJSON_GetObjectItem(params, "offset");
+        cJSON *data = cJSON_GetObjectItem(params, "data");
+        if (!cJSON_IsNumber(off) || off->valuedouble < 0 || !cJSON_IsString(data)) {
+            err = "offset and data are required";
+        } else {
+            // Decodes in place, inside the request; nothing else reads it.
+            ok = ota_push_write((uint32_t)off->valuedouble, data->valuestring,
+                                &next, &err);
+        }
+        ota_push_status(&size, &next);
+    } else if (strcmp(command, "ota.finish") == 0) {
+        const char *version = NULL;
+        ota_push_status(&size, &next);
+        ok = ota_push_finish(&version, &err);
+        if (ok) {
+            cJSON_AddStringToObject(result, "version", version ? version : "");
+            cJSON_AddStringToObject(result, "status", "verified; rebooting in 3 s");
+        }
+    } else if (strcmp(command, "ota.abort") == 0) {
+        ota_push_abort();
+        ok = true;
+    } else {
+        err = "unknown ota command";
+    }
+    cJSON_AddBoolToObject(result, "ok", ok);
+    if (strcmp(command, "ota.abort") != 0) {
+        cJSON_AddNumberToObject(result, "next", next);
+        cJSON_AddNumberToObject(result, "size", size);
+    }
+    if (!ok) {
+        cJSON *error = cJSON_CreateObject();
+        cJSON_AddStringToObject(error, "code", "ota_push");
+        cJSON_AddStringToObject(error, "message", err ? err : "failed");
+        cJSON_AddItemToObject(result, "error", error);
+    }
+    return result;
+}
+#endif
+
 static cJSON *on_ws_command(
     const char *command, cJSON *params, const char *request_id,
     noise_ctrl_session_generation_t session_generation) {
@@ -1916,6 +1977,9 @@ static cJSON *on_ws_command(
         cJSON_AddBoolToObject(result, "ok", true);
         return result;
     }
+#if CONFIG_HOMEHUB_DASHBOARD && CONFIG_HOMEHUB_OTA_ENABLED
+    if (strncmp(command, "ota.", 4) == 0) return ota_push_command(command, params);
+#endif
 #if CONFIG_HOMEHUB_DASHBOARD
     if (strcmp(command, "dashboard.data") == 0) {
         cJSON *screen = cJSON_GetObjectItem(params, "screen");
