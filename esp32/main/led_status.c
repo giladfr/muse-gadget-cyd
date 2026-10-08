@@ -742,7 +742,13 @@ static esp_err_t lcd_panel_init(void) {
     };
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = LCD_PIN_RST,
+#if CONFIG_HOMEHUB_CYD_PANEL_BGR
+        // The 2432S028R's ILI9341 takes BGR (MADCTL bit 3); with RGB, red
+        // and blue swap on everything drawn.
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
+#else
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+#endif
         .bits_per_pixel = 16,
     };
     esp_lcd_panel_io_handle_t io = NULL;
@@ -1386,7 +1392,7 @@ void led_status_show_animation(void) {
 void dashboard_display_set_active(bool on) {
 #if CONFIG_HOMEHUB_DISPLAY
     if (!s_panel || !s_lcd_lock) {
-        ESP_LOGE("dash.display", "set_active(%d): no panel (display init failed?)",
+        ESP_LOGE("link.dash_display", "set_active(%d): no panel (display init failed?)",
                  on);
         return;
     }
@@ -1401,7 +1407,7 @@ void dashboard_display_set_active(bool on) {
     }
     xSemaphoreGive(s_lcd_lock);
     if (on != was) {
-        ESP_LOGI("dash.display", "dashboard %s", on ? "ACTIVE, screen cleared" : "off");
+        ESP_LOGI("link.dash_display", "dashboard %s", on ? "ACTIVE, screen cleared" : "off");
     }
 #else
     (void)on;

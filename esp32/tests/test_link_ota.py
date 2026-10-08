@@ -51,7 +51,8 @@ class LinkOtaTest(unittest.TestCase):
             [*compiler, "-std=c11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror",
              "-DLINK_FAKE_CUSTOM_TASKS=1",
              "-I", str(include), "-I", str(ROOT / "tests/link_fakes"),
-             "-I", str(ROOT / "main"), *map(str, sources), "-o", str(binary)],
+             "-I", str(ROOT / "main"), *map(str, sources),
+             str(ROOT / "tests/link_fakes/ota_extra_fakes.c"), "-o", str(binary)],
             capture_output=True, text=True,
         )
         self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)

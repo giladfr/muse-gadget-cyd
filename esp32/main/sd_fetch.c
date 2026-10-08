@@ -15,7 +15,7 @@
 #include "psa/crypto.h"
 #include "sd_card.h"
 
-static const char *TAG = "sd.fetch";
+static const char *TAG = "link.sd_fetch";
 
 #define MAX_BYTES (8 * 1024 * 1024)
 #define CHUNK 1024

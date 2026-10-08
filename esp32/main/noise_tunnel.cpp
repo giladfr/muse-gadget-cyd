@@ -37,7 +37,16 @@ static const char *TAG = "link.noise_tun";
 // MTU-sized buffers) for the chunk plus concurrent WiFi/lwIP churn. Keep this
 // at the result-queue boundary, before every control chunk, tunnel batch and
 // ping. It is not a contiguous-allocation requirement or a reservation.
+#if CONFIG_HOMEHUB_DASHBOARD && !defined(CONFIG_SPIRAM) && !CONFIG_HOMEHUB_TUNNEL
+// The CYD dashboard's lean session (no PSRAM, no tunnel) never sends 8 KiB
+// batches: its control chunks are 2 KiB (CTRL_BODY_CHUNK_MAX). With the
+// dashboard running it settles at ~15 KiB free DMA RAM, so a 16 KiB margin
+// held link.register back forever: the session stayed up but the device was
+// never registered, and Muse saw it offline. Two chunks plus WiFi/lwIP churn.
+static constexpr size_t NOISE_TX_DMA_RESERVE_BYTES = 8 * 1024;
+#else
 static constexpr size_t NOISE_TX_DMA_RESERVE_BYTES = 16 * 1024;
+#endif
 
 // LARGEST free DMA block is a separate, much smaller allocation floor. C5 AES
 // allocates heap_caps_aligned_calloc(8, n * 2, sizeof(crypto_dma_desc_t), DMA):

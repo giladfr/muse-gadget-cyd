@@ -17,7 +17,7 @@
 #include "dashboard/dashboard.h"
 #include "sd_card.h"
 
-static const char *TAG = "sd.jpeg";
+static const char *TAG = "link.sd_jpeg";
 
 // Work pool for the ROM decoder, per its documentation.
 #define JPEG_POOL_BYTES 3100

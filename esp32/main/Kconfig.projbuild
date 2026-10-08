@@ -256,6 +256,15 @@ menu "ESP32 Device SDK"
             agent name (a still status screen on e-paper), and the display.*
             commands.
 
+    config HOMEHUB_CYD_PANEL_BGR
+        bool "CYD panel takes blue-green-red colour order"
+        depends on HOMEHUB_LED_BACKEND_CYD_ILI9341
+        default y
+        help
+            The 2432S028R's ILI9341 takes BGR. Sent as RGB, red and blue
+            swap: amber shows as cyan and the mascot as blue. Turn this off
+            only for a panel that shows those colours swapped with it on.
+
     config HOMEHUB_DASHBOARD
         bool "Touch dashboard mode (CYD)"
         depends on HOMEHUB_LED_BACKEND_CYD_ILI9341

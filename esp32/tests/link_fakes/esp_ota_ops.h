@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "esp_app_desc.h"
 #include "esp_partition.h"
 
 typedef int esp_err_t;
@@ -34,6 +35,10 @@ typedef enum {
 } esp_ota_img_states_t;
 
 const esp_partition_t *esp_ota_get_running_partition(void);
+const esp_partition_t *esp_ota_get_next_update_partition(const esp_partition_t *start);
+esp_err_t esp_ota_set_boot_partition(const esp_partition_t *partition);
 const esp_partition_t *esp_ota_get_boot_partition(void);
 esp_err_t esp_ota_get_state_partition(const esp_partition_t *partition,
                                       esp_ota_img_states_t *state);
+esp_err_t esp_ota_get_partition_description(const esp_partition_t *partition,
+                                            esp_app_desc_t *app_desc);

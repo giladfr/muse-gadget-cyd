@@ -15,7 +15,7 @@
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
 
-static const char *TAG = "sd.card";
+static const char *TAG = "link.sd_card";
 static sdmmc_card_t *s_card;
 static bool s_mounted;
 static bool s_bus_ready;

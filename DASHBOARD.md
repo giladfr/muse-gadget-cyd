@@ -34,7 +34,7 @@ The demo above is the real dashboard code running in the simulator
   Muse as a chat message, so Muse can ask and you answer with one tap.
 - **Over the air:** firmware (`device.ota`) and SD-card files (`sd.fetch`).
 
-Version: `esp32/version.txt` (1.5.5).
+Version: `esp32/version.txt` (1.5.6).
 
 ## Preview without a board
 
@@ -154,6 +154,32 @@ board online:
   instead of at boot.
 - **v1.4.5 — Night backlight 5% → 25%.** At 5% the quadratic brightness curve
   gives a PWM duty of ~2/1023 — essentially black.
+
+## First board run of v1.5.5 (v1.5.6 fixes)
+
+- **Muse showed the board offline although it was connected.** The log has
+  "session established" and `ws=up`, but never "sent link.register".
+  Every control message waits for 16 KB of free DMA-capable RAM, a margin
+  sized for 8 KB tunnel batches. With the dashboard running, the CYD settles
+  at ~15 KB, so registration (and with it heartbeats and command results)
+  waited forever. The CYD's lean session sends 2 KB chunks and has no
+  tunnel, so its margin is now 8 KB (`noise_tunnel.cpp`). Look for
+  `sent link.register` and `link.register acked` in the boot log.
+- **Colours: amber showed as cyan, the mascot blue.** The 2432S028R's
+  ILI9341 takes BGR, and the panel was set up as RGB, so red and blue were
+  swapped on everything (the simulator can't show this). New option
+  `HOMEHUB_CYD_PANEL_BGR`, on by default for the CYD.
+- **Live quotes never run while Muse is connected.** A Nasdaq HTTPS fetch
+  needs ~64 KB of byte-addressable RAM. With the Link session and dashboard
+  up, about 15 KB is left. The check used to count the 30 KB IRAM heap
+  (32-bit access only, unusable for TLS), which made the shortfall look
+  smaller. It now counts only usable RAM, so the log tells the truth. For
+  stocks on this board, have Muse push them (`dashboard.data` "bridge", e.g.
+  `bridge/fetch.py` on the VM every minute or two in market hours); pushed
+  quotes are taken whenever the board's own fetches aren't arriving.
+- Host tests: the OTA and log-tag tests pass again (fakes for the crash
+  guard and progress calls; `sd.*`/`dash.display` log tags renamed to
+  `link.*`), and the tunnel test follows the `defined(CONFIG_SPIRAM)` fix.
 
 ## Boot splash (v1.5.5)
 
@@ -306,6 +332,9 @@ and only if the SHA-256 matches when one is given. Then e.g.
 - `device.ota` `{url, force?}`, `sd.fetch`: see above.
 
 ## Live stock quotes
+
+> **Without PSRAM, these fetches don't fit alongside the Muse connection**
+> (see "First board run of v1.5.5"). On the CYD, have Muse push stocks.
 
 The board fetches its watchlist itself from Nasdaq's public quote API over
 HTTPS, with **no API key**: the same source and request as DeskPulse

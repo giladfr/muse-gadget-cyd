@@ -484,12 +484,16 @@ void dash_quotes_tick(bool allowed) {
     }
     if (!allowed || s_running || !s_n_syms) return;
     if (!s_now && now < s_next_ms) return;
-    size_t free_b = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    size_t block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    // Byte-addressable RAM, which is what TLS and the buffers use. INTERNAL
+    // also counts the classic ESP32's 32-bit-only IRAM heap (~30 KB), so it
+    // overstated the room by that much.
+    size_t free_b = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    size_t block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (free_b < MIN_FREE || block < MIN_BLOCK) {
         if (s_heap_skips++ % 20 == 0) {
-            ESP_LOGW(TAG, "skipping: %u free, %u largest block", (unsigned)free_b,
-                     (unsigned)block);
+            ESP_LOGW(TAG, "skipping: %u free, %u largest block (need %u/%u for TLS)",
+                     (unsigned)free_b, (unsigned)block, (unsigned)MIN_FREE,
+                     (unsigned)MIN_BLOCK);
         }
         s_next_ms = now + RETRY_S * 1000;
         return;
