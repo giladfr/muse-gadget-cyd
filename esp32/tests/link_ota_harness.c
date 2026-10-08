@@ -122,6 +122,48 @@ static void attempt(const char *version, bool force, ota_result_t expected) {
     assert(aborts == (expected == OTA_RESULT_SKIPPED));
     assert(reboots == (expected == OTA_RESULT_APPLIED));
 }
+
+// Boards that pause the Muse session for the download (ota_set_link_hooks):
+// the reply comes first, then the pause, then the download task; success
+// reboots without resuming, anything else resumes with the reason.
+static int pauses, resumes, last_pct = -2;
+static char resume_why[96];
+static void on_pause(void) {
+    assert(callbacks == 1 && last_result == OTA_RESULT_STARTED);
+    pauses++;
+}
+static void on_resume(const char *why) {
+    resumes++;
+    snprintf(resume_why, sizeof(resume_why), "%s", why);
+}
+static void on_progress(int pct) { last_pct = pct; }
+
+static void run_pending(void) {
+    assert(pending_task);
+    TaskFunction_t task = pending_task;
+    pending_task = NULL;
+    task(pending_arg);
+}
+
+static void paused_attempt(const char *version, ota_result_t outcome) {
+    snprintf(incoming.version, sizeof(incoming.version), "%s", version);
+    starts = downloads = finishes = aborts = reboots = callbacks = 0;
+    pauses = resumes = 0;
+    resume_why[0] = 0;
+    ota_start("https://example.com/update.bin", false, on_result, &callbacks);
+    run_pending();  // answers, pauses, starts the download task
+    assert(callbacks == 1 && last_result == OTA_RESULT_STARTED);
+    assert(pauses == 1 && starts == 0);
+    run_pending();  // the download
+    assert(callbacks == 1);  // nothing more goes to the paused session
+    assert(starts == 1);
+    assert(reboots == (outcome == OTA_RESULT_APPLIED));
+    assert(resumes == (outcome != OTA_RESULT_APPLIED));
+    if (outcome != OTA_RESULT_APPLIED) {
+        assert(last_pct == -1);
+        assert(resume_why[0] && strcmp(resume_why, ota_last_result()) == 0);
+    }
+}
 #endif
 
 int main(void) {
@@ -133,6 +175,17 @@ int main(void) {
     attempt("1.0.1", true, OTA_RESULT_APPLIED);
     finish_result = ESP_FAIL;
     attempt("1000.0.0", false, OTA_RESULT_FAILED);
+
+    ota_set_link_hooks(on_pause, on_resume);
+    ota_set_progress_cb(on_progress);
+    finish_result = ESP_OK;
+    paused_attempt("1000.0.0", OTA_RESULT_APPLIED);
+    paused_attempt("1.0.1", OTA_RESULT_SKIPPED);
+    assert(strstr(ota_last_result(), "not newer"));
+    finish_result = ESP_FAIL;
+    paused_attempt("1000.0.0", OTA_RESULT_FAILED);
+    assert(strstr(ota_last_result(), "verify/finish failed"));
+    ota_set_link_hooks(NULL, NULL);
 #else
     // No network, task or flash fakes are linked in this configuration.
     // A dependency on any of those operations would fail the link.

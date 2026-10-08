@@ -34,7 +34,7 @@ The demo above is the real dashboard code running in the simulator
   Muse as a chat message, so Muse can ask and you answer with one tap.
 - **Over the air:** firmware (`device.ota`) and SD-card files (`sd.fetch`).
 
-Version: `esp32/version.txt` (1.6.0).
+Version: `esp32/version.txt` (1.6.1).
 
 ## Preview without a board
 
@@ -279,7 +279,31 @@ Put personal values in `esp32/devices/sdkconfig.local` (git-ignored, see
 
 ## Updating over the air
 
-### Pushed by Muse in chunks (v1.6.0+, recommended)
+### device.ota with an HTTPS URL (v1.6.1+, recommended)
+
+A Muse VM can only serve HTTPS, and the download's TLS session (~40-64 KB)
+doesn't fit next to the Muse session on this no-PSRAM board. From 1.6.1 the
+board makes room itself, so Muse needs one call:
+`device.ota {"url": "https://.../cyd-dashboard-vX.Y.Z.bin"}`.
+
+1. A small task answers Muse at once (`{"status": "downloading"}`), waits 2 s
+   for the reply to leave, and closes the Muse session (~70 KB back).
+2. The 16 KB download task then fetches the image over HTTPS, with the usual
+   checks: version (unless `force`), SHA-256 and signature. The screen
+   shows progress.
+3. Success reboots into the new version, which reconnects to Muse; the
+   rollback rules and crash-loop guard apply as before.
+4. Anything else (download error, not newer, failed verification)
+   reconnects, shows an "Update not installed" banner, and leaves the reason
+   in `dashboard.debug` (`ota=...`).
+
+`ota.c` does this through `ota_set_link_hooks()`, which app.c sets on
+dashboard builds without PSRAM; the OTA harness covers the paused path.
+
+### Pushed in chunks (ota.*, v1.6.0+)
+
+For callers that can loop device commands from code. A Muse VM can't
+today: it calls device commands one tool call at a time.
 
 A Muse VM can only serve HTTPS, and an HTTPS download needs a second TLS
 session (~40-64 KB) that doesn't fit next to the Link session on this
@@ -309,7 +333,7 @@ ota.finish {}  -> {version}   (verifies SHA-256 + signature, reboots in 3 s)
   timeout) and `tests/test_ota_push_sender.py` (sender against lost replies
   and an abandoned update).
 
-### From a URL (device.ota)
+### Before 1.6.1 (device.ota with the session up)
 
 No USB needed once 1.1.0 or later is on the board. **Flash the latest over
 USB once before closing the case:** 1.0.5 only accepts `https://` OTA URLs (which may

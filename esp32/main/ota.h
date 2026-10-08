@@ -19,6 +19,8 @@
 #include <stdbool.h>
 
 typedef enum {
+    OTA_RESULT_STARTED,   // accepted; the link pauses for the download, so no
+                          // further result follows (see ota_set_link_hooks)
     OTA_RESULT_APPLIED,   // written + verified; device will reboot shortly
     OTA_RESULT_SKIPPED,   // OTA disabled or incoming image not newer; not installed
     OTA_RESULT_FAILED,    // download / verification / flash error
@@ -55,6 +57,18 @@ typedef void (*ota_progress_cb)(int pct);
 void ota_set_progress_cb(ota_progress_cb cb);
 // Report progress the same way from another updater (ota_push.c).
 void ota_report_progress(int pct);
+
+// Boards without the RAM for a second TLS session next to the Muse session
+// (the CYD): pause() is called before the download and must free the
+// session; resume(why) after a download that did not install, with the
+// reason. With hooks set, the update reports OTA_RESULT_STARTED as soon as
+// it begins and nothing after that: success is a reboot into the new
+// version, failure is resume(why) and ota_last_result().
+typedef void (*ota_pause_cb)(void);
+typedef void (*ota_resume_cb)(const char *why);
+void ota_set_link_hooks(ota_pause_cb pause, ota_resume_cb resume);
+// The outcome of the last update attempt since boot ("" if none).
+const char *ota_last_result(void);
 
 // Crash-loop guard. Call ota_crash_guard_boot() first thing at boot: after
 // three crash resets in a row (panic or watchdog) it boots the other OTA slot,

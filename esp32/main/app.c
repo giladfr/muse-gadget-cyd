@@ -1928,6 +1928,29 @@ static cJSON *ota_push_command(const char *command, cJSON *params) {
 }
 #endif
 
+#if CONFIG_HOMEHUB_DASHBOARD && !defined(CONFIG_SPIRAM)
+// device.ota on the CYD: the download's TLS session only fits with the Muse
+// session closed (ota.c calls these from its task).
+static void ota_pause_link(void) {
+    disconnect_vm_transports();
+}
+
+static void ota_resume_link(const char *why) {
+    ESP_LOGW(TAG, "firmware update did not install (%s); reconnecting", why);
+    noise_ctrl_reconnect(strcmp(s_ui_wifi, "down") == 0 ? NULL : s_ui_wifi);
+    cJSON *n = cJSON_CreateObject();
+    if (n) {
+        const char *err = NULL;
+        cJSON_AddStringToObject(n, "text", "Update not installed");
+        cJSON_AddStringToObject(n, "detail", why);
+        cJSON_AddStringToObject(n, "level", "alert");
+        cJSON_AddNumberToObject(n, "ttl_s", 600);
+        dashboard_notify(n, &err);
+        cJSON_Delete(n);
+    }
+}
+#endif
+
 static cJSON *on_ws_command(
     const char *command, cJSON *params, const char *request_id,
     noise_ctrl_session_generation_t session_generation) {
@@ -2025,8 +2048,12 @@ static cJSON *on_ws_command(
         return async;
     }
     if (strcmp(command, "dashboard.debug") == 0) {
-        char dbg[400];
-        dashboard_debug(dbg, sizeof(dbg));
+        char dbg[520];
+        dashboard_debug(dbg, 400);
+        if (ota_last_result()[0]) {
+            size_t len = strlen(dbg);
+            snprintf(dbg + len, sizeof(dbg) - len, " | ota=%s", ota_last_result());
+        }
         cJSON *result = cJSON_CreateObject();
         cJSON_AddBoolToObject(result, "ok", true);
         cJSON_AddStringToObject(result, "debug", dbg);
@@ -2877,6 +2904,11 @@ void app_run(void) {
 #if CONFIG_HOMEHUB_DASHBOARD
     dashboard_init();
     ota_set_progress_cb(dashboard_ota_progress);
+#if !defined(CONFIG_SPIRAM)
+    // No RAM for device.ota's HTTPS download next to the Muse session: the
+    // session pauses for it.
+    ota_set_link_hooks(ota_pause_link, ota_resume_link);
+#endif
 #endif
 
     heap_snapshot("after config+id");

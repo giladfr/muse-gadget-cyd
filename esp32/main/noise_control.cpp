@@ -1591,10 +1591,12 @@ static char *build_register_json(void) {
 #if CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
         // Boards without PSRAM take plain HTTP too: the image's signature is
         // what makes it trusted, and TLS would not fit next to the session.
+        // On boards without PSRAM the Muse session pauses for an HTTPS
+        // download (ota.c's link hooks), so HTTPS works too.
         cJSON_AddItemToObject(ota_required, "url",
-                              string_param("HTTP or HTTPS URL of the signed .bin "
-                                           "firmware image to flash (plain HTTP "
-                                           "recommended on this board)."));
+                              string_param("HTTPS (or HTTP) URL of the signed .bin "
+                                           "firmware image. The board goes offline "
+                                           "for the download, then reboots into it."));
 #else
         cJSON_AddItemToObject(ota_required, "url",
                               string_param("HTTPS URL of the .bin firmware image to flash."));
@@ -1621,11 +1623,11 @@ static char *build_register_json(void) {
             cJSON_AddItemToObject(begin_required, "sha256",
                                   string_param("SHA-256 of the whole .bin, hex."));
             add_command(commands, "ota.begin",
-                        "Firmware update pushed in chunks over this session (no "
-                        "URL needed): start, or resume the same image. Returns "
-                        "next (offset to write) and chunk_max. Then ota.write "
-                        "until next == size, then ota.finish. Drive it from a "
-                        "script; see the gadget-cyd-desk-dashboard skill.",
+                        "Firmware pushed in chunks over this session, for callers "
+                        "that can loop device commands from code (else use "
+                        "device.ota with a URL): start, or resume the same image. "
+                        "Returns next and chunk_max; then ota.write until next == "
+                        "size, then ota.finish.",
                         begin_required, nullptr);
             cJSON *write_required = cJSON_CreateObject();
             cJSON *offset_param = cJSON_CreateObject();
@@ -1712,6 +1714,19 @@ static void noise_ota_status(const ota_event_t *ev, void *user) {
                      "{\"status\":\"applied\",\"version\":\"%s\",\"rebooting\":true}",
                      ev->new_version ? ev->new_version : "");
             cJSON_AddStringToObject(result, "payload_json", payload);
+            break;
+        }
+        case OTA_RESULT_STARTED: {
+            // The board pauses this session for the download (no RAM for
+            // both TLS sessions): it comes back on the new version, or
+            // reconnects and reports why in dashboard.debug.
+            cJSON_AddBoolToObject(result, "ok", true);
+            cJSON_AddStringToObject(
+                result, "payload_json",
+                "{\"status\":\"downloading\",\"note\":\"The board goes offline "
+                "for the download (1-3 min) and reboots into the new version. Check "
+                "device.health for it; if the version is unchanged, the reason is "
+                "in dashboard.debug (ota=).\"}");
             break;
         }
         case OTA_RESULT_SKIPPED: {

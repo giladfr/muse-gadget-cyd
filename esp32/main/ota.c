@@ -30,6 +30,19 @@ void ota_report_progress(int pct) {
     if (s_progress_cb) s_progress_cb(pct);
 }
 
+static ota_pause_cb s_pause_cb;
+static ota_resume_cb s_resume_cb;
+static char s_last_result[96];
+
+void ota_set_link_hooks(ota_pause_cb pause, ota_resume_cb resume) {
+    s_pause_cb = pause;
+    s_resume_cb = resume;
+}
+
+const char *ota_last_result(void) {
+    return s_last_result;
+}
+
 bool ota_is_enabled(void) {
 #if CONFIG_HOMEHUB_OTA_ENABLED
     return true;
@@ -68,6 +81,7 @@ static void progress(int pct) {
 typedef struct {
     char *url;
     bool force;
+    bool paused;  // the Muse session is paused for this download
     ota_status_cb cb;
     void *user;
 } ota_ctx_t;
@@ -103,6 +117,18 @@ static bool version_is_newer(const char *cand, const char *cur) {
 
 static void emit(ota_ctx_t *ctx, ota_result_t result, const char *detail,
                  const char *new_version, const char *running_version) {
+    if (result != OTA_RESULT_STARTED) {
+        snprintf(s_last_result, sizeof(s_last_result), "%s%s%s%s",
+                 detail ? detail : "", new_version ? " (" : "",
+                 new_version ? new_version : "", new_version ? ")" : "");
+        if (ctx->paused && result != OTA_RESULT_APPLIED) {
+            // The link is down for the download: bring it back, and say why
+            // there.
+            ctx->paused = false;
+            progress(-1);  // off the update screen, whatever failed
+            if (s_resume_cb) s_resume_cb(s_last_result);
+        }
+    }
     if (!ctx->cb) return;
     ota_event_t ev = {
         .result = result,
@@ -282,6 +308,28 @@ done:
     vTaskDelete(NULL);
 }
 
+// Answer now (the reply can't go out once the session is paused), give it
+// a moment to leave, pause the session, then download with the RAM it freed.
+// The outcome after this is the reboot, or resume(why) on failure.
+static void ota_pause_task(void *arg) {
+    ota_ctx_t *ctx = (ota_ctx_t *)arg;
+    emit(ctx, OTA_RESULT_STARTED, "downloading with the Muse link paused", NULL,
+         esp_app_get_description()->version);
+    ctx->cb = NULL;
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    progress(0);
+    ESP_LOGI(TAG, "pausing the Muse session for the download");
+    s_pause_cb();
+    ctx->paused = true;
+    if (xTaskCreate(ota_task, "ota", 16384, ctx, 5, NULL) != pdPASS) {
+        emit(ctx, OTA_RESULT_FAILED, "no RAM for the download task", NULL, NULL);
+        progress(-1);
+        free(ctx->url);
+        free(ctx);
+    }
+    vTaskDelete(NULL);
+}
+
 void ota_start(const char *url, bool force, ota_status_cb cb, void *user) {
     ota_ctx_t *ctx = url && *url ? calloc(1, sizeof(*ctx)) : NULL;
     if (ctx) {
@@ -301,7 +349,21 @@ void ota_start(const char *url, bool force, ota_status_cb cb, void *user) {
         }
         return;
     }
-    // 8 KB stack: TLS handshake + flash writes during the OTA download.
+    if (s_pause_cb) {
+        // No RAM for the download task and its TLS next to the Muse
+        // session: a small task answers and pauses the session first.
+        if (xTaskCreate(ota_pause_task, "ota_pause", 3072, ctx, 5, NULL) == pdPASS) return;
+        ESP_LOGE(TAG, "could not start OTA task");
+        free(ctx->url);
+        free(ctx);
+        if (cb) {
+            ota_event_t ev = { .result = OTA_RESULT_FAILED,
+                               .detail = "could not start ota task" };
+            cb(&ev, user);
+        }
+        return;
+    }
+    // 16 KB stack: TLS handshake + flash writes during the OTA download.
     if (xTaskCreate(ota_task, "ota", 16384, ctx, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "could not start OTA task");
         free(ctx->url);
