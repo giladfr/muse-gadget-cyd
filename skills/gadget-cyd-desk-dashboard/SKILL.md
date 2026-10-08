@@ -4,7 +4,7 @@ description: >-
   Use the user's CYD desk dashboard (ESP32-2432S028R, 320x240 touch screen, a paired Muse
   gadget) proactively: show your own cards with buttons the user can tap to answer you, post
   notification banners, push weather and calendar data, show images, collect taps, and
-  install firmware updates on it (device.ota). Use when the dashboard is paired and the
+  install firmware updates on it (device.ota), and manage its Wi-Fi networks (wifi.*). Use when the dashboard is paired and the
   user would benefit from glanceable information or a one-tap decision at their desk, or asks
   to update its firmware.
 ---
@@ -85,6 +85,21 @@ For persistent alerts, use a card instead.
 `dashboard.takeover {"url": "http://..."}` shows a baseline JPEG full-screen with an X (back to
 the dashboard after 10 minutes). For files you will show again, put them on the board's SD
 card once with `sd.fetch {"url", "path"}` and show them with `display.draw_sd {"path"}`.
+
+### Wi-Fi
+
+The board remembers up to 8 networks and joins whichever is in range, so a move or a new router
+needs no re-pairing, as long as you save the new network **while the board is still online**:
+
+- `wifi.add {"ssid": "...", "password": "..."}` (`"hidden": true` for a network that doesn't
+  broadcast its name). The board stays on its current network and switches when that one is
+  gone: at power-up in the new place, or within ~5 minutes after the old router goes off.
+- `wifi.list` → `{current, saved}` (names only; passwords never come back).
+- `wifi.forget {"ssid": "..."}`; the board refuses to forget its only network.
+
+Ask the user for the new network's name and password; don't guess. If the board is already
+offline on an unknown network, it can't hear you: the user holds BOOT for 5 s and pairs it again
+in the Muse app.
 
 ### Firmware updates
 

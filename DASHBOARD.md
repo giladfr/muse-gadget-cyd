@@ -277,6 +277,26 @@ Put personal values in `esp32/devices/sdkconfig.local` (git-ignored, see
 | `HOMEHUB_DASHBOARD_QUOTES_OPEN_S` | 20 | refresh while the market is open |
 | `HOMEHUB_DASHBOARD_BRIDGE_POLL` / `_URL` | n | poll a self-hosted `bridge.py` (not needed) |
 
+## Changing Wi-Fi (v1.6.1+)
+
+No re-pairing needed. The board keeps up to 8 networks (`wifi_known`) and at
+boot joins whichever saved one is in range. Pairing (the device token) has
+nothing to do with Wi-Fi.
+
+- **Before a move or a router change**, have Muse save the new network:
+  `wifi.add {"ssid", "password", "hidden"?}`. `wifi.list` shows the current
+  and saved networks (names only); `wifi.forget {"ssid"}` removes one, but
+  never the only one.
+- **Moved:** at power-up the board joins the new network.
+- **New router in the same place:** once the old network has been gone for 5
+  minutes, the board reboots (only if it knows another network) and boot
+  joins whichever saved network is in range. Until then, `wifi_mgr` only
+  retries the network it was on.
+- **Already offline on an unknown network:** Muse can't reach it. Hold BOOT
+  for 5 s (forgets Wi-Fi and pairing) and pair again in the Muse app.
+
+`tests/test_wifi_commands.py` covers the commands.
+
 ## Updating over the air
 
 ### device.ota with an HTTPS URL (v1.6.1+, recommended)

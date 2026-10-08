@@ -95,6 +95,7 @@ static const char *HEARTBEAT_TAG = "link.heartbeat";
 #define WIFI_CHANNEL_KEY        "wifi_channel"
 #define WIFI_CHANNEL_VALUE_BYTES 4
 #define WIFI_JOIN_TRIES         3       // saved networks tried per join
+#define WIFI_LOST_REBOOT_US     (5LL * 60 * 1000000)  // dashboard: see heartbeat
 #define WIFI_JOIN_TRY_MIN_MS    8000    // each one's share of the timeout, at least
 #define WIFI_JOIN_SCAN_MAX      40      // as many networks as a scan reports
 #define WIFI_QUICK_MIN_RSSI     (-75)   // near enough to join without a full scan
@@ -1951,6 +1952,77 @@ static void ota_resume_link(const char *why) {
 }
 #endif
 
+#if CONFIG_HOMEHUB_DASHBOARD
+// wifi.list / wifi.add / wifi.forget: Muse manages the saved networks, so a
+// move or a new router needs no re-pairing. The board joins whichever saved
+// network is in range at boot (join_saved_networks), and reboots to look for
+// one after WIFI_LOST_REBOOT_US without Wi-Fi.
+static int saved_network_count(void) {
+    wifi_known_list_t *list = malloc(sizeof(*list));
+    if (!list) return -1;
+    int n = wifi_known_load(list);
+    wifi_known_wipe(list);
+    free(list);
+    return n;
+}
+
+static cJSON *wifi_command(const char *command, cJSON *params) {
+    cJSON *ssid_j = cJSON_GetObjectItem(params, "ssid");
+    const char *ssid = cJSON_IsString(ssid_j) ? ssid_j->valuestring : NULL;
+    const char *current = strcmp(s_ui_wifi, "down") == 0 ? "" : s_ui_wifi;
+    if (strcmp(command, "wifi.add") == 0) {
+        cJSON *pass_j = cJSON_GetObjectItem(params, "password");
+        cJSON *hidden_j = cJSON_GetObjectItem(params, "hidden");
+        const char *pass = cJSON_IsString(pass_j) ? pass_j->valuestring : "";
+        if (!ssid || !ssid[0] || strlen(ssid) > WIFI_KNOWN_SSID_MAX
+            || strlen(pass) > WIFI_KNOWN_PASS_MAX
+            || (pass[0] && strlen(pass) < 8)) {
+            return command_error("invalid_param",
+                                 "ssid (1-32 characters) and password (8-64, or none "
+                                 "for an open network) are required");
+        }
+        if (!wifi_known_remember(ssid, pass, cJSON_IsTrue(hidden_j) ? 1 : 0)) {
+            return command_error("storage_error", "could not save the network");
+        }
+        ESP_LOGI(TAG, "wifi.add: saved %s", ssid);
+    } else if (strcmp(command, "wifi.forget") == 0) {
+        if (!ssid || !ssid[0]) return command_error("missing_param", "ssid is required");
+        if (strcmp(ssid, current) == 0 && saved_network_count() <= 1) {
+            return command_error("invalid_param",
+                                 "that's the only network the board knows; add "
+                                 "another first or it can't reconnect");
+        }
+        if (!wifi_known_forget(ssid)) {
+            return command_error("storage_error", "could not save the change");
+        }
+        ESP_LOGI(TAG, "wifi.forget: %s", ssid);
+    } else if (strcmp(command, "wifi.list") != 0) {
+        return command_error("unsupported", "unknown wifi command");
+    }
+    // Names only: passwords never leave the board.
+    wifi_known_list_t *list = malloc(sizeof(*list));
+    if (!list) return command_error("out_of_memory", "failed to allocate");
+    int n = wifi_known_load(list);
+    cJSON *result = cJSON_CreateObject();
+    cJSON *saved = cJSON_CreateArray();
+    for (int i = 0; i < n; i++) {
+        cJSON_AddItemToArray(saved, cJSON_CreateString(list->nets[i].ssid));
+    }
+    wifi_known_wipe(list);
+    free(list);
+    cJSON_AddBoolToObject(result, "ok", true);
+    cJSON_AddStringToObject(result, "current", current);
+    cJSON_AddItemToObject(result, "saved", saved);
+    if (strcmp(command, "wifi.add") == 0 && strcmp(ssid, current) != 0) {
+        cJSON_AddStringToObject(result, "note",
+                                "Saved. The board stays on its current network and "
+                                "switches when that one is gone (moved, or the old "
+                                "router off): within ~5 minutes, or at power-up.");
+    }
+    return result;
+}
+#endif
+
 static cJSON *on_ws_command(
     const char *command, cJSON *params, const char *request_id,
     noise_ctrl_session_generation_t session_generation) {
@@ -2002,6 +2074,9 @@ static cJSON *on_ws_command(
     }
 #if CONFIG_HOMEHUB_DASHBOARD && CONFIG_HOMEHUB_OTA_ENABLED
     if (strncmp(command, "ota.", 4) == 0) return ota_push_command(command, params);
+#endif
+#if CONFIG_HOMEHUB_DASHBOARD
+    if (strncmp(command, "wifi.", 5) == 0) return wifi_command(command, params);
 #endif
 #if CONFIG_HOMEHUB_DASHBOARD
     if (strcmp(command, "dashboard.data") == 0) {
@@ -3167,6 +3242,27 @@ void app_run(void) {
             ensure_access_token_ready_with_gate_held(false, true);
             operation_gate_give();
         }
+
+#if CONFIG_HOMEHUB_DASHBOARD
+        // A move or a new router: wifi_mgr only ever retries the network it
+        // was on. After a while without Wi-Fi, when another network is saved,
+        // reboot; boot joins whichever saved network is in range.
+        {
+            static int64_t wifi_down_since;
+            int64_t now_us = esp_timer_get_time();
+            if (wifi_mgr_is_connected() || !config_is_provisioned()) {
+                wifi_down_since = 0;
+            } else if (!wifi_down_since) {
+                wifi_down_since = now_us;
+            } else if (now_us - wifi_down_since > WIFI_LOST_REBOOT_US
+                       && saved_network_count() > 1) {
+                ESP_LOGW(TAG, "no Wi-Fi for %llds; rebooting to look for another "
+                         "saved network", (long long)(WIFI_LOST_REBOOT_US / 1000000));
+                vTaskDelay(pdMS_TO_TICKS(200));
+                esp_restart();
+            }
+        }
+#endif
 
         // Reconcile the data-plane view with the tunnel's real state. The tunnel
         // stream opens/resets independently of the control session, so the LED

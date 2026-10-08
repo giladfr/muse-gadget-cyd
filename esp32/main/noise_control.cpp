@@ -1483,6 +1483,31 @@ static char *build_register_json(void) {
                             "to you as chat messages when possible).",
                             nullptr, events_optional);
             }
+            {
+                // Saved Wi-Fi networks (app.c wifi_command): a move or a new
+                // router needs no re-pairing.
+                cJSON *add_required = cJSON_CreateObject();
+                cJSON_AddItemToObject(add_required, "ssid", string_param("Network name."));
+                cJSON *add_optional = cJSON_CreateObject();
+                cJSON_AddItemToObject(add_optional, "password",
+                                      string_param("WPA password (none for an open network)."));
+                cJSON *hidden_param = cJSON_CreateObject();
+                cJSON_AddStringToObject(hidden_param, "type", "boolean");
+                cJSON_AddStringToObject(hidden_param, "description",
+                                        "The network doesn't broadcast its name.");
+                cJSON_AddItemToObject(add_optional, "hidden", hidden_param);
+                add_command(commands, "wifi.add",
+                            "Save another Wi-Fi network (up to 8). The board stays "
+                            "on its current one and switches when that is gone.",
+                            add_required, add_optional);
+                cJSON *forget_required = cJSON_CreateObject();
+                cJSON_AddItemToObject(forget_required, "ssid", string_param("Network name."));
+                add_command(commands, "wifi.forget", "Forget a saved Wi-Fi network.",
+                            forget_required, nullptr);
+                add_command(commands, "wifi.list",
+                            "The current and saved Wi-Fi networks (names only).",
+                            nullptr, nullptr);
+            }
             add_command(commands, "dashboard.calibrate",
                         "Show the touch calibration screen (tap three targets; "
                         "saved on the device). Holding a finger on the screen "
