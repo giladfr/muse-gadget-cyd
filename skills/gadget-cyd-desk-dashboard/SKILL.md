@@ -3,9 +3,10 @@ name: gadget-cyd-desk-dashboard
 description: >-
   Use the user's CYD desk dashboard (ESP32-2432S028R, 320x240 touch screen, a paired Muse
   gadget) proactively: show your own cards with buttons the user can tap to answer you, post
-  notification banners, push weather and calendar data, show images, and collect taps. Use
-  when the dashboard is paired and the user would benefit from glanceable information or a
-  one-tap decision at their desk.
+  notification banners, push weather and calendar data, show images, collect taps, and
+  install firmware updates on it (ota.* commands). Use when the dashboard is paired and the
+  user would benefit from glanceable information or a one-tap decision at their desk, or asks
+  to update its firmware.
 ---
 
 # CYD Desk Dashboard
@@ -87,11 +88,28 @@ card once with `sd.fetch {"url", "path"}` and show them with `display.draw_sd {"
 
 ### Firmware updates (`ota.*`)
 
-`device.ota` needs an HTTPS download this board has no RAM for. Push the signed `.bin`
-yourself over this session instead, **from a script on your VM** (a 1.8 MB image is ~450
-calls; don't make them one by one). `esp32/tools/ota_push.py` in the gadget's repo does it:
-`push(path, invoke)`, with `invoke(command, params)` calling the device command and returning
-its payload. The protocol, if you write your own:
+Don't use `device.ota` on this board: its HTTPS download doesn't fit in the board's RAM. Push
+the signed `.bin` over this session with the `ota.*` commands instead (firmware 1.6.0 or later;
+an older board only has `device.ota` and must be flashed over USB once). A 1.8 MB image is ~450
+calls, so **run them from a script on your VM**, not one tool call at a time:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/giladfr/muse-gadget-cyd/dashboard/esp32/tools/ota_push.py
+```
+
+```python
+from ota_push import push
+version = push("cyd-dashboard-v1.6.1.bin", invoke)
+```
+
+`invoke(command, params)` is however your code calls a command on this device: it returns the
+command's payload as a dict and raises on failure (put the payload, when there is one, on the
+exception as `.payload`). From a shell instead, give any program that calls a device command:
+`python3 ota_push.py image.bin --invoke 'PROGRAM {command} {params_file}'` (it gets the
+params as a JSON file and prints the payload as JSON). If you can't call device commands from
+code at all, say so to the user instead of making hundreds of calls by hand.
+
+The protocol, if you write your own loop:
 
 1. `ota.begin {"size": <bytes>, "sha256": "<hex of the whole .bin>"}` → `{next, chunk_max}`.
    The same size and sha256 again resumes; `next` says where.
@@ -103,7 +121,9 @@ its payload. The protocol, if you write your own:
    itself if the new one can't reach you within a few minutes.
 
 The screen shows the progress. An update with no chunk for 2 minutes is abandoned (`ota.begin`
-starts it again). `ota.abort {}` cancels.
+starts it again). `ota.abort {}` cancels. Afterwards, check `device.health` reports the new
+version. Only push images built for this board (`tools/cyd_release.sh` in the gadget's repo);
+anything else fails the signature check and nothing changes.
 
 ## Good proactive uses
 
