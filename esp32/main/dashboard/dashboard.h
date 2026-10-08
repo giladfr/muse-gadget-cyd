@@ -27,6 +27,10 @@ void dashboard_init(void);
 // first successful connection and stays up afterwards.
 void dashboard_set_paired(bool paired);
 
+// The Link session's link.register went out: the dashboard's RAM can now be
+// allocated (dashboard_set_paired waits for this, or 20 s).
+void dashboard_link_registered(void);
+
 // Link (control session) up or down, for the header's status dot.
 void dashboard_set_link(bool up);
 

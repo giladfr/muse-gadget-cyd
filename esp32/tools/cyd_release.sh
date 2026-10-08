@@ -38,6 +38,7 @@ echo
 echo "Built $DEST"
 echo "  version $VERSION, $SIZE bytes ($((SIZE * 100 / SLOT))% of the OTA slot), sha256 $SHA"
 echo
-echo "Serve it where the board can reach it (plain HTTP is fine: the image is"
-echo "signature-checked before it is installed), then ask Muse to run:"
-echo "  device.ota {\"url\": \"http://<host>/$(basename "$DEST")\"}"
+echo "Serve it at an HTTPS (or HTTP) URL the board can reach, then ask Muse to run:"
+echo "  device.ota {\"url\": \"https://<host>/$(basename "$DEST")\"}"
+echo "The board pauses its Muse connection for the download (1.6.1+) and reboots"
+echo "into the new version; the image is signature-checked before it installs."

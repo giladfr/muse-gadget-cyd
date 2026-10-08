@@ -865,12 +865,25 @@ static bool ensure_access_token_ready_with_gate_held(
     char *refresh = NULL;
 
     access = load_token_unlocked("access_token");
+    if (!access && config_has_str("access_token")) {
+        // Stored, but no RAM to read it into right now: not a missing token.
+        ESP_LOGW(TAG, "no RAM to read the device token; trying later");
+        ok = true;
+        goto done;
+    }
     if (!access) {
         ok = migrate_legacy_auth_token_locked();
         goto done;
     }
 
     refresh = load_token_unlocked("refresh_token");
+    if (!refresh && config_has_str("refresh_token")) {
+        // The same: minting a new pair here would need far more RAM again,
+        // and the stored pair is fine.
+        ESP_LOGW(TAG, "no RAM to read the refresh token; trying later");
+        ok = true;
+        goto done;
+    }
     if (!refresh) {
         ESP_LOGI(TAG, "access_token has no refresh_token; minting device pair");
         ok = mint_and_store_device_tokens_unlocked(access, NULL);

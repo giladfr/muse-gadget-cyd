@@ -198,6 +198,7 @@ int main(void) {
     tick_time();
     dashboard_init();
     dashboard_set_link(true);
+    dashboard_link_registered();  // as when link.register has gone out
     dashboard_set_paired(true);
     settle(2600);
     snap("splash");

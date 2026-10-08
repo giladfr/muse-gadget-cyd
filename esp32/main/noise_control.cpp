@@ -18,6 +18,10 @@
 #include "stack_monitor.h"
 #include "noise_upgrade.h"
 #include "noise_tunnel_internal.h"
+#include "sdkconfig.h"
+#if CONFIG_HOMEHUB_DASHBOARD
+#include "dashboard/dashboard.h"
+#endif
 
 #include <cstring>
 #include <cstdlib>
@@ -2474,6 +2478,10 @@ static session_result_t run_session(stack_monitor_t *stack) {
                          control_tx.is_registration ? "link.register" :
                          control_tx.is_heartbeat ? "link.heartbeat" : "control message",
                          (unsigned)control_tx.json_len);
+#if CONFIG_HOMEHUB_DASHBOARD
+                // The dashboard held its RAM back until this went out.
+                if (control_tx.is_registration) dashboard_link_registered();
+#endif
                 clear_pending_json_body(control_tx);
             }
         }

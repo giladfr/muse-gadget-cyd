@@ -34,7 +34,7 @@ The demo above is the real dashboard code running in the simulator
   Muse as a chat message, so Muse can ask and you answer with one tap.
 - **Over the air:** firmware (`device.ota`) and SD-card files (`sd.fetch`).
 
-Version: `esp32/version.txt` (1.6.1).
+Version: `esp32/version.txt` (1.6.2).
 
 ## Preview without a board
 
@@ -276,6 +276,28 @@ Put personal values in `esp32/devices/sdkconfig.local` (git-ignored, see
 | `HOMEHUB_DASHBOARD_QUOTES_SYMBOLS` | `AMD,NVDA,AAPL,MSFT,SPY,QQQ` | up to 8 (or `dashboard.stocks`) |
 | `HOMEHUB_DASHBOARD_QUOTES_OPEN_S` | 20 | refresh while the market is open |
 | `HOMEHUB_DASHBOARD_BRIDGE_POLL` / `_URL` | n | poll a self-hosted `bridge.py` (not needed) |
+
+## First board run of v1.6.1 (v1.6.2 fixes)
+
+The board connected, but `link.register` still never went out, free
+DMA-capable RAM fell to 6K (largest block 1K), Wi-Fi dropped
+(`bcn_timeout`), and reconnecting failed with `mbedtls_ssl_setup
+-0x008D` (out of memory).
+
+- **The dashboard waits for registration.** It used to allocate its strips,
+  task and splash the moment the session came up, right when the (larger)
+  registration message was waiting for an 8 KB margin. Now
+  `dashboard_set_paired()` holds back until `link.register` has been sent
+  (`dashboard_link_registered()`), or 20 s pass. `dash_sim --no-register`
+  and `tests/register_fallback.txt` cover the fallback.
+- **A failed malloc is not a missing token.** `load_token_unlocked()`
+  returned NULL when its 2 KB buffer couldn't be allocated, which read as
+  "no refresh_token". The board then tried to mint a new token pair over
+  HTTPS on every heartbeat, needing far more RAM again. It now checks the
+  key exists (`config_has_str()`, no buffer) and tries later.
+- **Four-MSS TCP windows (5760)**, like the no-PSRAM Cardputer, so a burst
+  can't park ~16 KB in Wi-Fi receive buffers. `validate_config.cmake`
+  allows it for no-PSRAM, no-tunnel dashboard builds (test updated).
 
 ## Changing Wi-Fi (v1.6.1+)
 

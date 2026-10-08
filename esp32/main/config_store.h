@@ -39,6 +39,9 @@ void config_store_init(void);
 
 bool config_get_str(const char *key, char *out, size_t buf_size);
 bool config_set_str(const char *key, const char *value);
+// Whether a non-empty string is stored under `key`, without reading it (no
+// buffer to allocate).
+bool config_has_str(const char *key);
 bool config_erase_key(const char *key);
 config_key_lookup_t config_key_lookup(const char *key);
 

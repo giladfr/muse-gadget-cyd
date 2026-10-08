@@ -6,7 +6,7 @@
  *
  *   dash_sim [--scale N] [--headless] [--script FILE] [--nvs FILE]
  *            [--swap-touch] [--invert-x] [--invert-y] [--chat-fail] [--slow-spi]
- *            [--listen PORT] [--muse-socket PATH]
+ *            [--listen PORT] [--muse-socket PATH] [--no-register]
  *
  * Console (stdin or --script), one per line:
  *   <muse command> [JSON params]   e.g. dashboard.card {"id":"x","title":"Hi"}
@@ -21,6 +21,9 @@
  * Muse's commands from `musegadget dash-sim` on 127.0.0.1:PORT, one JSON line
  * {"command": ..., "params": {...}} per connection, and --muse-socket sends
  * card button taps to Muse through that service's local socket.
+ *
+ * --no-register: the Link session never registers, so the dashboard starts
+ * only on its 20 s fallback.
  *
  * Keys: Left/Right swipe, C calibrate, B/D bright/dark room, L link toggle,
  * S screenshot (sim-NNN.bmp), Q quit.
@@ -437,6 +440,7 @@ int main(int argc, char **argv) {
     bool headless = false, chat_fail = false;
     const char *script = NULL;
     int listen_port = 0;
+    bool register_link = true;
     snprintf(g_sim.nvs_path, sizeof(g_sim.nvs_path), "dash_sim_nvs.txt");
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--scale") && i + 1 < argc) s_scale = atoi(argv[++i]);
@@ -450,12 +454,13 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--chat-fail")) chat_fail = true;
         else if (!strcmp(argv[i], "--slow-spi")) g_sim.slow_spi = true;
         else if (!strcmp(argv[i], "--listen") && i + 1 < argc) listen_port = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-register")) register_link = false;
         else if (!strcmp(argv[i], "--muse-socket") && i + 1 < argc)
             snprintf(g_sim.muse_socket, sizeof(g_sim.muse_socket), "%s", argv[++i]);
         else {
             fprintf(stderr, "usage: %s [--scale N] [--headless] [--script FILE] [--nvs FILE]\n"
                     "  [--swap-touch] [--invert-x] [--invert-y] [--chat-fail] [--slow-spi]\n"
-                    "  [--listen PORT] [--muse-socket PATH]\n",
+                    "  [--listen PORT] [--muse-socket PATH] [--no-register]\n",
                     argv[0]);
             return 2;
         }
@@ -468,6 +473,7 @@ int main(int argc, char **argv) {
     // Boot: the dashboard starts, then the Link session comes up.
     dashboard_init();
     dashboard_set_link(true);
+    if (register_link) dashboard_link_registered();  // link.register went out
     dashboard_set_paired(true);
     if (listen_port && !start_listener(listen_port)) return 1;
 

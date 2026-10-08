@@ -148,14 +148,19 @@ class LinkNoiseTunnelTest(unittest.TestCase):
         cache.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=cache) as tmpdir:
             script = Path(tmpdir) / "guard.cmake"
-            for snd, wnd, cardputer, tunnel, psram, accepted in (
-                (16384, 16384, False, True, True, True),
-                (65535, 16384, False, True, True, False),
-                (16384, 65535, False, True, True, False),
-                (5760, 5760, True, False, False, True),
-                (5760, 5760, True, True, False, False),
-                (5760, 5760, True, False, True, False),
-                (5760, 5760, False, False, False, False),
+            for snd, wnd, cardputer, tunnel, psram, accepted, dashboard in (
+                (16384, 16384, False, True, True, True, False),
+                (65535, 16384, False, True, True, False, False),
+                (16384, 65535, False, True, True, False, False),
+                (5760, 5760, True, False, False, True, False),
+                (5760, 5760, True, True, False, False, False),
+                (5760, 5760, True, False, True, False, False),
+                (5760, 5760, False, False, False, False, False),
+                # The CYD dashboard: no PSRAM, no tunnel.
+                (5760, 5760, False, False, False, True, True),
+                (5760, 5760, False, False, True, False, True),
+                (5760, 5760, False, True, False, False, True),
+                (16384, 16384, False, False, False, True, True),
             ):
                 with self.subTest(snd=snd, wnd=wnd):
                     script.write_text(
@@ -163,7 +168,8 @@ class LinkNoiseTunnelTest(unittest.TestCase):
                         f"set(CONFIG_LWIP_TCP_WND_DEFAULT {wnd})\n"
                         f"set(CONFIG_MUSE_BOARD_M5STACK_CARDPUTER_ADV {'ON' if cardputer else 'OFF'})\n"
                         f"set(CONFIG_HOMEHUB_TUNNEL {'ON' if tunnel else 'OFF'})\n"
-                        f"set(CONFIG_SPIRAM {'ON' if psram else 'OFF'})\n" + guard
+                        f"set(CONFIG_SPIRAM {'ON' if psram else 'OFF'})\n"
+                        f"set(CONFIG_HOMEHUB_DASHBOARD {'ON' if dashboard else 'OFF'})\n" + guard
                     )
                     ran = subprocess.run(
                         ["cmake", "-P", str(script)],

@@ -606,18 +606,59 @@ static bool dashboard_activate(void) {
     return s_task != NULL;
 }
 
+// The dashboard's RAM (strips, task, splash) waits for the Link session's
+// link.register to go out: started together, they left the session without
+// the room to send it, so Muse never saw the board, and squeezed Wi-Fi until
+// it dropped. If registration doesn't go out, start anyway after a while.
+#define ACTIVATE_FALLBACK_US (20 * 1000000LL)
+static bool s_registered;
+static esp_timer_handle_t s_activate_timer;
+
+static void activate_now(const char *why) {
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool go = s_paired && !s_task;
+    // Allocate under the lock so the registration and the fallback timer
+    // can't both start it.
+    bool ok = go && dashboard_activate();
+    xSemaphoreGive(s_lock);
+    if (go) ESP_LOGI(TAG, "activating (%s)%s", why, ok ? "" : ": no RAM");
+    if (ok) wake();
+}
+
+static void activate_fallback(void *arg) {
+    (void)arg;
+    activate_now("registration still pending");
+}
+
+void dashboard_link_registered(void) {
+    if (!s_lock) return;
+    s_registered = true;
+    if (s_activate_timer) esp_timer_stop(s_activate_timer);
+    activate_now("registered with Muse");
+}
+
 void dashboard_set_paired(bool paired) {
     if (!s_lock) return;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool was = s_paired;
     s_paired = paired;
     xSemaphoreGive(s_lock);
-    if (paired && !was) {
-        ESP_LOGI(TAG, "paired; dashboard will activate");
-        if (dashboard_activate()) {
-            wake();
+    if (!paired || was) return;
+    if (s_registered) {
+        activate_now("paired");
+        return;
+    }
+    ESP_LOGI(TAG, "paired; waiting for the Muse registration to go out first");
+    if (!s_activate_timer) {
+        const esp_timer_create_args_t a = {.callback = activate_fallback,
+                                           .name = "dash_activate"};
+        if (esp_timer_create(&a, &s_activate_timer) != ESP_OK) {
+            activate_now("paired");
+            return;
         }
     }
+    esp_timer_stop(s_activate_timer);
+    esp_timer_start_once(s_activate_timer, ACTIVATE_FALLBACK_US);
 }
 
 void dashboard_set_link(bool up) {

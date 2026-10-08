@@ -1,0 +1,9 @@
+# Run with --no-register: link.register never goes out, so the dashboard keeps
+# its RAM back until its 20 s fallback, then starts anyway.
+sleep 5000
+dashboard.debug
+expect state=0
+sleep 17000
+dashboard.debug
+expect state=1
+quit

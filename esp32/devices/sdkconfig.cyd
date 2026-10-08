@@ -105,3 +105,10 @@ CONFIG_HOMEHUB_SDCARD_SCK=18
 CONFIG_HOMEHUB_SDCARD_MOSI=23
 CONFIG_HOMEHUB_SDCARD_MISO=19
 CONFIG_HOMEHUB_SDCARD_CS=5
+
+# Four-MSS TCP windows, like the no-PSRAM Cardputer: with 16 KB windows a burst
+# could park ~16 KB of received data in Wi-Fi buffers while the dashboard and
+# the Muse session were already near the bottom of DMA-capable RAM, and Wi-Fi
+# dropped (bcn_timeout) with nothing left to receive into.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=5760
+CONFIG_LWIP_TCP_WND_DEFAULT=5760
